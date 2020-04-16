@@ -13,7 +13,7 @@ def solve_nominal_model(
         alpha: float = 0.5,
         time_limit: int = 60,
         mip_gap: int = 1e-2
-):
+) -> np.ndarray:
 
     # Initialize model
     m = gp.Model("nominal")
