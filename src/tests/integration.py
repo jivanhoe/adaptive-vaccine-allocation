@@ -1,11 +1,16 @@
 from models.nominal_model import solve_nominal_model
+from models.proportional_allocation_model import solve_proportional_allocation_model
 from utils.data_generation import generate_random_data
 from utils.data_processing import get_toy_data_from_census_data
+from utils.solution_visualization import plot_solution
 
 POP_DATA_PATH = "../../data/census/pop-data.csv"
 LAND_AREA_DATA_PATH = "../../data/census/land-area-data.csv"
-TIME_LIMIT = 200
+SOLUTION_PLOT_PATH = "example_plot.png"
+TIME_LIMIT = 10
 USE_RANDOM_DATA = False
+USE_PROPORTIONAL_ALLOCATION_MODEL = True
+SAVE_PLOT = False
 
 if USE_RANDOM_DATA:
     pop, immunized_pop, active_cases, rep_factor, morbidity_rate, budget = generate_random_data()
@@ -16,13 +21,32 @@ else:
         groupby_state=True
     )
 
-allocated_vaccines = solve_nominal_model(
-    pop=pop,
-    immunized_pop=immunized_pop,
-    active_cases=active_cases,
-    rep_factor=rep_factor,
-    morbidity_rate=morbidity_rate,
-    budget=budget,
-    time_limit=TIME_LIMIT
-)
+if USE_PROPORTIONAL_ALLOCATION_MODEL:
+    vaccines, cases, unimmunized_pop, deaths = solve_proportional_allocation_model(
+        pop=pop,
+        immunized_pop=immunized_pop,
+        active_cases=active_cases,
+        rep_factor=rep_factor,
+        morbidity_rate=morbidity_rate,
+        budget=budget
+    )
+    print(f"Objective value: {deaths.sum()}")
+else:
+    vaccines, cases, unimmunized_pop, deaths = solve_nominal_model(
+        pop=pop,
+        immunized_pop=immunized_pop,
+        active_cases=active_cases,
+        rep_factor=rep_factor,
+        morbidity_rate=morbidity_rate,
+        budget=budget,
+        time_limit=TIME_LIMIT
+    )
 
+if SAVE_PLOT:
+    plot_solution(
+        vaccines=vaccines,
+        cases=cases,
+        unimmunized_pop=unimmunized_pop,
+        deaths=deaths,
+        path=SOLUTION_PLOT_PATH
+    )
