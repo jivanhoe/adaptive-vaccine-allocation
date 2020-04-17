@@ -4,14 +4,16 @@ from utils.data_processing import get_toy_data_from_census_data
 
 POP_DATA_PATH = "../../data/census/pop-data.csv"
 LAND_AREA_DATA_PATH = "../../data/census/land-area-data.csv"
+TIME_LIMIT = 200
 USE_RANDOM_DATA = False
 
 if USE_RANDOM_DATA:
     pop, immunized_pop, active_cases, rep_factor, morbidity_rate, budget = generate_random_data()
 else:
     pop, immunized_pop, active_cases, rep_factor, morbidity_rate, budget = get_toy_data_from_census_data(
-         pop_data_path=POP_DATA_PATH,
-         land_area_data_path=LAND_AREA_DATA_PATH,
+        pop_data_path=POP_DATA_PATH,
+        land_area_data_path=LAND_AREA_DATA_PATH,
+        groupby_state=True
     )
 
 allocated_vaccines = solve_nominal_model(
@@ -21,6 +23,6 @@ allocated_vaccines = solve_nominal_model(
     rep_factor=rep_factor,
     morbidity_rate=morbidity_rate,
     budget=budget,
-    alpha=0.9
+    time_limit=TIME_LIMIT
 )
 

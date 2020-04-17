@@ -1,6 +1,11 @@
+import logging
+from typing import Optional
+
 import gurobipy as gp
-from gurobipy import GRB
 import numpy as np
+from gurobipy import GRB
+
+logger = logging.getLogger(__name__)
 
 
 def solve_nominal_model(
@@ -11,8 +16,9 @@ def solve_nominal_model(
         morbidity_rate: np.ndarray,
         budget: np.ndarray,
         alpha: float = 0.5,
-        time_limit: int = 60,
-        mip_gap: int = 1e-2
+        mip_gap: int = 1e-2,
+        output_flag: bool = True,
+        time_limit: Optional[int] = None
 ) -> np.ndarray:
 
     # Initialize model
@@ -25,6 +31,7 @@ def solve_nominal_model(
     regions = range(num_regions)
     risk_classes = range(num_classes)
     periods = range(1, num_periods)
+    logger.debug(f"Regions: {num_regions} \t Risk classes: {num_classes} \t Periods: {num_periods}")
 
     # Define decision variables
     vaccines = m.addVars(num_regions, num_classes, num_periods, lb=0)
@@ -41,13 +48,13 @@ def solve_nominal_model(
 
     # Set immunity dynamics constraint
     m.addConstrs(
-        unimmunized_pop[i, k, t] >= unimmunized_pop[i, k, t - 1] - cases[i, k, t - 1] - vaccines[i, k, t]
+        unimmunized_pop[i, k, t] >= unimmunized_pop[i, k, t - 1] - vaccines[i, k, t] - cases[i, k, t]
         for i in regions for k in risk_classes for t in periods
     )
 
     # Set contagion dynamics constraint (bi-linear, non-convex)
     m.addConstrs(
-        cases[i, k, t] >= rep_factor[i] / pop[i].sum() * unimmunized_pop[i, k, t] * cases.sum(i, "*", t-1)
+        cases[i, k, t] >= rep_factor[i] / pop[i].sum() * unimmunized_pop[i, k, t - 1] * cases.sum(i, "*", t-1)
         for i in regions for k in risk_classes for t in periods
     )
 
@@ -65,9 +72,11 @@ def solve_nominal_model(
     m.setObjective(objective, GRB.MINIMIZE)
 
     # Solve model
-    m.params.NonConvex = 2
-    m.params.TimeLimit = time_limit
+    #m.params.NonConvex = 2
     m.params.MIPGap = mip_gap
+    m.params.OutputFlag = output_flag
+    if time_limit:
+        m.params.TimeLimit = time_limit
     m.optimize()
 
     # Return allocated vaccines

@@ -1,7 +1,7 @@
+from typing import List, Callable, Tuple, Optional
+
 import numpy as np
 import pandas as pd
-
-from typing import List, Callable, Tuple, Optional
 
 
 def process_pop_data(
@@ -39,9 +39,13 @@ def process_census_data(
         land_area_data_path: str,
         age_cutoffs: List[float],
         rep_factor_model: Callable[[np.ndarray], np.ndarray],
+        groupby_state: bool
 ) -> Tuple[np.ndarray, np.ndarray]:
     pop_df = pd.read_csv(pop_data_path, index_col=[0, 1]).sort_index()
     land_area_df = pd.read_csv(land_area_data_path, index_col=[0, 1]).sort_index()
+    if groupby_state:
+        pop_df = pop_df.reset_index().groupby("state").sum()
+        land_area_df = land_area_df.reset_index().groupby("state").sum()
 
     pop = process_pop_data(
         pop_df=pop_df,
@@ -76,18 +80,20 @@ def get_toy_data_from_census_data(
         land_area_data_path: str,
         pct_immune: float = 1e-1,
         pct_active_cases: float = 1e-2,
-        pct_budget: float = 1e-1,
-        min_rep_factor: float = 1.0,
+        pct_budget: float = 2e-1,
+        min_rep_factor: float = 1.1,
         max_rep_factor: float = 3.0,
         age_cutoffs: Tuple[float] = (55,),
         morbidity_rate: List[float] = (5e-3, 8e-2),
         unit: float = 1e6,
+        groupby_state: bool = False,
         max_regions: Optional[int] = None
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     pop, rep_factor = process_census_data(
         pop_data_path=pop_data_path,
         land_area_data_path=land_area_data_path,
         age_cutoffs=list(age_cutoffs),
+        groupby_state=groupby_state,
         rep_factor_model=lambda density: toy_rep_factor_model(
             density=density,
             min_rep_factor=min_rep_factor,
