@@ -51,8 +51,8 @@ def solve_nominal_model(
 
     # Set contagion dynamics constraint (bi-linear, non-convex)
     m.addConstrs(
-        cases[i, k, t] == rep_factor[i] / pop[i].sum() * unimmunized_pop[i, k, t - 1] * cases.sum(i, "*", t-1)
-        for i in regions for k in risk_classes for t in periods
+        cases[i, k, t] == rep_factor[i] / pop[i].sum() * (unimmunized_pop[i, k, t - 1]-vaccines[i, k, t])
+        * cases.sum(i, "*", t-1) for i in regions for k in risk_classes for t in periods
     )
 
     # Set immunity dynamics constraint
