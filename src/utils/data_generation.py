@@ -20,9 +20,9 @@ def normal(
 
 
 def generate_random_data(
-        num_regions: int = 50,
-        num_classes: int = 2,
-        num_periods: int = 10,
+        num_regions: int = 20,
+        num_classes: int = 3,
+        num_periods: int = 5,
         min_pop: float = 0.5,
         max_pop: float = 10.,
         min_active_cases_pct: float = 2e-2,
