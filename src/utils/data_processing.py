@@ -84,7 +84,7 @@ def get_toy_data_from_census_data(
         min_rep_factor: float = 1.1,
         max_rep_factor: float = 3.0,
         age_cutoffs: Tuple[float] = (55,),
-        morbidity_rate: List[float] = (5e-3, 8e-2),
+        morbidity_rate: Tuple[float] = (5e-3, 8e-2),
         unit: float = 1e6,
         groupby_state: bool = False,
         max_regions: Optional[int] = None
@@ -106,9 +106,9 @@ def get_toy_data_from_census_data(
         rep_factor = rep_factor[:max_regions]
     immunized_pop = pop * pct_immune
     active_cases = pop * pct_active_cases
-    budget = np.ones(int(np.round(1 / pct_budget))) * pop.sum() * pct_budget
+    budget = np.ones(int(np.round(1 / pct_budget))) * (pop - immunized_pop - active_cases).sum() * pct_budget
     budget[0] = 0
-    morbidity_rate = np.array(morbidity_rate)
+    morbidity_rate = np.tile(morbidity_rate, (pop.shape[0], 1))
     return pop, immunized_pop, active_cases, rep_factor, morbidity_rate, budget
 
 

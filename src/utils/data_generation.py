@@ -14,7 +14,7 @@ def uniform(
 def normal(
         mean: float,
         std: float,
-        dims: Tuple[int],
+        dims: Tuple[int, ...],
 ) -> np.ndarray:
     return std * np.random.rand(*dims) + mean
 
@@ -29,8 +29,8 @@ def generate_random_data(
         max_active_cases_pct: float = 5e-2,
         min_closed_cases_pct: float = 5e-2,
         max_closed_cases_pct: float = 2e-1,
-        min_rep_factor: float = 1.,
-        max_rep_factor: float = 3.,
+        min_rep_factor: float = 0.5,
+        max_rep_factor: float = 1.5,
         min_morbidity_rate: float = 5e-3,
         max_morbidity_rate: float = 3e-2,
         budget_pct: float = 1e-1,
@@ -60,7 +60,7 @@ def generate_random_data(
     morbidity_rate = uniform(
         min_val=min_morbidity_rate,
         max_val=max_morbidity_rate,
-        dims=(num_classes,)
+        dims=(num_regions, num_classes)
     )
     budget = pop.sum() * budget_pct * np.ones(num_periods)
     budget[0] = 0

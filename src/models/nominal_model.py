@@ -6,7 +6,6 @@ import numpy as np
 from gurobipy import GRB
 
 from src.models.proportional_allocation_model import solve_proportional_allocation_model
-from src.models.mc_convex_relaxation import solve_linear_relaxation
 
 logger = logging.getLogger(__name__)
 
@@ -18,10 +17,11 @@ def solve_nominal_model(
         rep_factor: np.ndarray,
         morbidity_rate: np.ndarray,
         budget: np.ndarray,
-        alpha: float = 0.5,
-        mip_gap: int = 1e-2,
+        eps: float = 0.0,
+        mip_gap: float = 1e-2,
+        feasibility_tol: float = 1e-4,
         output_flag: bool = True,
-        time_limit: Optional[int] = None
+        time_limit: int = 120
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
 
     # Initialize model
@@ -51,13 +51,13 @@ def solve_nominal_model(
 
     # Set contagion dynamics constraint (bi-linear, non-convex)
     m.addConstrs(
-        cases[i, k, t] == rep_factor[i] / pop[i].sum() * (unimmunized_pop[i, k, t - 1]-vaccines[i, k, t])
-        * cases.sum(i, "*", t-1) for i in regions for k in risk_classes for t in periods
+        cases[i, k, t] == rep_factor[i] / pop[i].sum() * (unimmunized_pop[i, k, t - 1] - vaccines[i, k, t]) * cases.sum(i, "*", t-1)
+        for i in regions for k in risk_classes for t in periods
     )
 
     # Set immunity dynamics constraint
     m.addConstrs(
-        unimmunized_pop[i, k, t] == unimmunized_pop[i, k, t - 1] - vaccines[i, k, t] - cases[i, k, t]
+        unimmunized_pop[i, k, t] == unimmunized_pop[i, k, t - 1] - vaccines[i, k, t] #- cases[i, k, t]
         for i in regions for k in risk_classes for t in periods
     )
 
@@ -66,17 +66,16 @@ def solve_nominal_model(
 
     # Set general fairness constraint
     m.addConstrs(
-        vaccines.sum(i, "*", t) >= alpha * pop[i].sum() / pop.sum() * budget[t]
+        vaccines.sum(i, "*", t) >= eps * unimmunized_pop.sum(i, "*", t)
         for i in regions for t in periods
     )
 
     # Define objective
-    objective = sum(morbidity_rate[k] * cases.sum("*", k, "*") for k in risk_classes)
+    objective = sum(morbidity_rate[i, k] * cases.sum(i, k, "*") for i in regions for k in risk_classes)
     m.setObjective(objective, GRB.MINIMIZE)
 
     # Give model warm start
-    # TODO: check if this is the correct way to give a warm start
-    in_vaccines, in_cases, in_unimmunized_pop, _ = solve_proportional_allocation_model(
+    vaccines_warm_start, _, _, _ = solve_proportional_allocation_model(
         pop=pop,
         immunized_pop=immunized_pop,
         active_cases=active_cases,
@@ -84,20 +83,17 @@ def solve_nominal_model(
         morbidity_rate=morbidity_rate,
         budget=budget
     )
-
     for i in regions:
         for k in risk_classes:
             for t in periods:
-                vaccines[i, k, t].start = in_vaccines[i, k, t]
-                cases[i, k, t].start = in_cases[i, k, t]
-                unimmunized_pop[i, k, t].start = in_unimmunized_pop[i, k, t]
+                vaccines[i, k, t].start = vaccines_warm_start[i, k, t]
 
     # Solve model
     m.params.NonConvex = 2
     m.params.MIPGap = mip_gap
     m.params.OutputFlag = output_flag
-    if time_limit:
-        m.params.TimeLimit = time_limit
+    m.params.FeasibilityTol = feasibility_tol
+    m.params.TimeLimit = time_limit
     m.optimize()
 
     def get_value(variable: gp.tupledict) -> np.array:
@@ -110,8 +106,9 @@ def solve_nominal_model(
     unimmunized_pop = get_value(unimmunized_pop)
     deaths = np.array([
         [
-            [morbidity_rate[k] * (0 if t == 0 else cases[i, k, t - 1]) for t in range(num_periods)]
+            [morbidity_rate[i, k] * (0 if t == 0 else cases[i, k, t - 1]) for t in range(num_periods)]
             for k in risk_classes
         ] for i in regions
     ])
+
     return vaccines, cases, unimmunized_pop, deaths

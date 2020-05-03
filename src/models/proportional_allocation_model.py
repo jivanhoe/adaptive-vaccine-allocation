@@ -40,8 +40,8 @@ def solve_proportional_allocation_model(
         for k in risk_classes:
             for t in periods:
                 vaccines[i, k, t] = pop[i, k] / pop.sum() * budget[t]
-                cases[i, k, t] = rep_factor[i] / pop[i].sum() * unimmunized_pop[i, k, t - 1] * cases[i, :, t-1].sum()
+                cases[i, k, t] = rep_factor[i] / pop[i].sum() * (unimmunized_pop[i, k, t - 1] - vaccines[i, k, t]) * cases[i, :, t - 1].sum()
                 unimmunized_pop[i, k, t] = max(unimmunized_pop[i, k, t - 1] - cases[i, k, t] - vaccines[i, k, t], 0)
-                deaths[i, k, t] = morbidity_rate[k] * cases[i, k, t-1]
+                deaths[i, k, t] = morbidity_rate[i, k] * cases[i, k, t - 1]
 
     return vaccines, cases, unimmunized_pop, deaths
