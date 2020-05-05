@@ -28,8 +28,7 @@ def solve_nominal_model(
     m = gp.Model("nominal")
 
     # Define sets
-    num_regions = pop.shape[0]
-    num_classes = pop.shape[1]
+    num_regions, num_classes = pop.shape
     num_periods = budget.shape[0]
     regions = range(num_regions)
     risk_classes = range(num_classes)

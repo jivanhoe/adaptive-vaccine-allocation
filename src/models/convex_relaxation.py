@@ -49,7 +49,7 @@ def solve_convex_relaxation(
     infections_per_case_ub = np.zeros(shape=(num_regions, num_classes, num_periods))
     for i in regions:
         for k in risk_classes:
-            infections_per_case_ub[i, k, :] = 2 *rep_factor[i] / pop[i].sum() * (pop[i, k] - immunized_pop[i, k])
+            infections_per_case_ub[i, k, :] = 2 * rep_factor[i] / pop[i].sum() * (pop[i, k] - immunized_pop[i, k])
 
     # Define variables
     vaccines = m.addVars(num_regions, num_classes, num_periods, lb=0)
