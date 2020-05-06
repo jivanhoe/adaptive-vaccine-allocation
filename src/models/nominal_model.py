@@ -91,6 +91,7 @@ def solve_nominal_model(
     m.params.NonConvex = 2
     m.params.MIPGap = mip_gap
     m.params.OutputFlag = output_flag
+    m.params.LogToConsole = output_flag
     m.params.FeasibilityTol = feasibility_tol
     m.params.TimeLimit = time_limit
     m.optimize()

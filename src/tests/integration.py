@@ -25,7 +25,7 @@ vaccines, cases, unimmunized_pop, deaths = solve_nominal_model(
     active_cases=active_cases,
     rep_factor=rep_factor,
     morbidity_rate=morbidity_rate,
-    budget=budget,
+    budget=budget[:7],
     time_limit=TIME_LIMIT
 )
 
