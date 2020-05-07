@@ -1,5 +1,5 @@
 import logging
-from typing import Tuple
+from typing import Tuple, Optional
 
 import gurobipy as gp
 import numpy as np
@@ -10,15 +10,19 @@ from src.models.proportional_allocation_model import solve_proportional_allocati
 logger = logging.getLogger(__name__)
 
 
-def solve_nominal_model(
+def solve_robust_model(
         pop: np.ndarray,
         immunized_pop: np.ndarray,
         active_cases: np.ndarray,
         rep_factor: np.ndarray,
         morbidity_rate: np.ndarray,
         budget: np.ndarray,
-        alpha: float = 0.0,
-        mip_gap: float = 1e-2,
+        min_proportion: float = 0.0,
+        delta: float = 0.1,
+        rho: float = 0.1,
+        gamma: Optional[float] = None,
+        q_norm: int = 2,
+        mip_gap: float = 1e-4,
         feasibility_tol: float = 1e-4,
         output_flag: bool = True,
         time_limit: int = 120
@@ -40,6 +44,20 @@ def solve_nominal_model(
     cases = m.addVars(num_regions, num_classes, num_periods, lb=0)
     unimmunized_pop = m.addVars(num_regions, num_classes, num_periods, lb=0)
 
+    # Define analysis variables required for robust formulation
+    y = m.addVars(num_regions, num_classes, num_periods, lb=0)  #
+    l1_penalty = m.addVars(num_regions, num_classes, num_periods, lb=0)
+    lq_star_penalty = m.addVar(num_regions)
+
+    # Set gamma to default values (for 99% probabilistic guarantee) if not specified
+    if gamma is None:
+        if q_norm == 2:
+            gamma = 3.03 * rho ** 2
+        elif q_norm == 1:
+            gamma = 3.03 * np.sqrt(num_regions * num_classes * num_periods) * rho ** 2
+        else:
+            raise NotImplementedError
+
     # Set initial conditions constraints
     m.addConstrs(vaccines[i, k, 0] == 0 for i in regions for k in risk_classes)
     m.addConstrs(cases[i, k, 0] == active_cases[i, k] for i in regions for k in risk_classes)
@@ -50,7 +68,8 @@ def solve_nominal_model(
 
     # Set contagion dynamics constraint (bi-linear, non-convex)
     m.addConstrs(
-        cases[i, k, t] == rep_factor[i] / pop[i].sum() * (unimmunized_pop[i, k, t - 1] - vaccines[i, k, t]) * cases.sum(i, "*", t-1)
+        cases[i, k, t] == (1 + delta / np.sqrt(t)) ** t * rep_factor[i] / pop[i].sum() * (
+                unimmunized_pop[i, k, t - 1] - vaccines[i, k, t]) * cases.sum(i, "*", t-1)
         for i in regions for k in risk_classes for t in periods
     )
 
@@ -65,12 +84,32 @@ def solve_nominal_model(
 
     # Set general fairness constraint
     m.addConstrs(
-        vaccines.sum(i, "*", t) >= alpha * unimmunized_pop.sum(i, "*", t)
+        vaccines.sum(i, "*", t) >= min_proportion * unimmunized_pop.sum(i, "*", t)
         for i in regions for t in periods
     )
 
-    # Define objective
-    objective = sum(morbidity_rate[i, k] * cases.sum(i, k, "*") for i in regions for k in risk_classes)
+    # Define objective (with analysis variable constraints as required)
+    m.addConstrs(
+        l1_penalty[i, k, t] >= morbidity_rate[i,k] * cases[i, k, t] - y[i, k, t]
+        for i in regions for k in risk_classes for t in periods
+    )
+    m.addConstrs(
+        l1_penalty[i, k, t] >= -morbidity_rate[i, k] * cases[i, k, t] + y[i, k, t]
+        for i in regions for k in risk_classes for t in periods
+    )
+    if q_norm == 2:
+        m.addConstr(
+            lq_star_penalty * lq_star_penalty >= sum(
+                y[i, k, t] * y[i, k, t] for i in regions for k in risk_classes for t in periods)
+        )
+    elif q_norm == 1:
+        m.addConstrs(
+            lq_star_penalty >= y[i, k, t] for i in regions for k in risk_classes for t in periods
+        )
+    else:
+        raise NotImplementedError
+    objective = sum(morbidity_rate[i, k] * cases.sum(i, k, "*") for i in regions for k in risk_classes) + \
+        rho * sum(l1_penalty[i, k, t] for i in regions for k in risk_classes for t in periods) + gamma * lq_star_penalty
     m.setObjective(objective, GRB.MINIMIZE)
 
     # Give model warm start
@@ -80,7 +119,8 @@ def solve_nominal_model(
         active_cases=active_cases,
         rep_factor=rep_factor,
         morbidity_rate=morbidity_rate,
-        budget=budget
+        budget=budget,
+        delta=delta
     )
     for i in regions:
         for k in risk_classes:
