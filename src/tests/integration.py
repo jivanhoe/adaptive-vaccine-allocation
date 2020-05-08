@@ -1,6 +1,7 @@
 from models.nominal_model import solve_nominal_model
 from utils.data_generation import generate_random_data
 from models.robust_model import solve_robust_model
+from models.robust2_model import solve_robust2_model
 from utils.data_processing import get_toy_data_from_census_data
 
 POP_DATA_PATH = "../../data/census/pop-data.csv"
