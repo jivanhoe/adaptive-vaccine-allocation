@@ -6,26 +6,32 @@ from utils.data_processing import get_toy_data_from_census_data
 from utils.load_data import process_data
 import os
 
+# PATHS census data
+POP_DATA_PATH = "../../data/census/pop-data.csv"
+LAND_AREA_DATA_PATH = "../../data/census/land-area-data.csv"
 
+# PATHS realized data
 FOLDER_PATH = "/Users/alessandropreviero/Downloads/processed_data"
 immunized_pop_data_path = os.path.join(FOLDER_PATH, "immunized_pop.csv")
 pop_data_path = os.path.join(FOLDER_PATH, "pop.csv")
 active_cases_data_path = os.path.join(FOLDER_PATH, "active_cases.csv")
 rep_factor_data_path = os.path.join(FOLDER_PATH, "rep_factor.csv")
 morbidity_data_path = os.path.join(FOLDER_PATH, "morbidity_rate.csv")
+
 SOLUTION_PLOT_PATH = "example_plot.png"
-TIME_LIMIT = 120
+TIME_LIMIT = 30
 USE_RANDOM_DATA = False
+USE_CENSUS_DATA = False
 
 if USE_RANDOM_DATA:
     pop, immunized_pop, active_cases, rep_factor, morbidity_rate, budget = generate_random_data()
 
-#else:
-#    pop, immunized_pop, active_cases, rep_factor, morbidity_rate, budget = get_toy_data_from_census_data(
-#        pop_data_path=POP_DATA_PATH,
-#        land_area_data_path=LAND_AREA_DATA_PATH,
-#        groupby_state=True,
-#    )
+elif USE_CENSUS_DATA:
+    pop, immunized_pop, active_cases, rep_factor, morbidity_rate, budget = get_toy_data_from_census_data(
+        pop_data_path=POP_DATA_PATH,
+        land_area_data_path=LAND_AREA_DATA_PATH,
+        groupby_state=True,
+    )
 
 else:
     states, regions, pop, immunized_pop, active_cases, rep_factor, morbidity_rate, budget = process_data(
