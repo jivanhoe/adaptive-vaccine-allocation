@@ -35,6 +35,12 @@ MODELS = [
         name="nominal"
     ),
     FoldingHorizonAllocationModel(
+        solver=solve_nominal_model,
+        solver_params={"time_limit": 120, "mip_gap": 0.01, "output_flag": False},
+        planning_horizon=PLANNING_HORIZON,
+        name="nominal"
+    ),
+    FoldingHorizonAllocationModel(
         solver=solve_robust_model,
         solver_params={"rho": 0.1, "gamma": 3.0, "delta": 0.1, "time_limit": 120, "mip_gap": 0.01, "output_flag": False},
         planning_horizon=PLANNING_HORIZON,
