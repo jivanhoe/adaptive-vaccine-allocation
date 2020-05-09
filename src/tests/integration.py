@@ -19,7 +19,7 @@ rep_factor_data_path = os.path.join(FOLDER_PATH, "rep_factor.csv")
 morbidity_data_path = os.path.join(FOLDER_PATH, "morbidity_rate.csv")
 
 SOLUTION_PLOT_PATH = "example_plot.png"
-TIME_LIMIT = 30
+TIME_LIMIT = 120
 USE_RANDOM_DATA = False
 USE_CENSUS_DATA = False
 
@@ -41,7 +41,7 @@ else:
         immunized_pop_data_path,
         active_cases_data_path)
 
-vaccines, cases, unimmunized_pop, deaths = solve_robust_model(
+vaccines, cases, unimmunized_pop, deaths = solve_robust2_model(
     pop=pop,
     immunized_pop=immunized_pop,
     active_cases=active_cases,

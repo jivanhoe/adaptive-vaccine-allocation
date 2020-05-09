@@ -68,11 +68,6 @@ def solve_robust2_model(
     var_cases = m.addVars(num_regions, num_classes, num_periods)  # == cases / var_rep_fac
     unimmunized_pop = m.addVars(num_regions, num_classes, num_periods)
 
-    # Define analysis variables for robust immunity dynamics
-    y_immunity = m.addVars(num_regions, num_classes, num_periods)
-    l1_immunity = m.addVars(num_regions, num_classes, num_periods)
-    lq_immunity = m.addVar()
-
     # Define analysis variables for robust objective
     l1_morbidity = m.addVars(num_regions, num_classes, num_periods)
     lq_morbidity = m.addVar()
@@ -95,32 +90,8 @@ def solve_robust2_model(
 
     # Set robust immunity dynamics constraints
     m.addConstrs(
-        l1_immunity[i, k, t] >= var_rep_fac[i, t] * var_cases[i, k, t] - y_immunity[i, k, t]
-        for i in regions for k in risk_classes for t in periods
-    )
-
-    m.addConstrs(
-        l1_immunity[i, k, t] >= -var_rep_fac[i, t] * var_cases[i, k, t] + y_immunity[i, k, t]
-        for i in regions for k in risk_classes for t in periods
-    )
-
-    if q_norm == 2:
-        m.addConstr(
-            lq_immunity * lq_immunity >= sum(y_immunity[i, k, t] * y_immunity[i, k, t]
-                                             for i in regions for k in risk_classes for t in periods)
-        )
-
-    elif q_norm == 1:
-        m.addConstrs(
-            lq_immunity >= y_immunity[i, k, t] for i in regions for k in risk_classes for t in periods
-        )
-    else:
-        raise NotImplementedError
-
-    m.addConstrs(
         unimmunized_pop[i, k, t] == unimmunized_pop[i, k, t - 1] - vaccines[i, k, t] -
-        var_rep_fac[i, t] * var_cases[i, k, t] - rho * l1_immunity[i, k, t] - gamma * lq_immunity
-        for i in regions for k in risk_classes for t in periods
+        (1-rho) * var_rep_fac[i, t] * var_cases[i, k, t] for i in regions for k in risk_classes for t in periods
     )
 
     # Set contagion dynamics (bi-linear constraints)
