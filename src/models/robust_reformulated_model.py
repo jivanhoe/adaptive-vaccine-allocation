@@ -1,16 +1,14 @@
 import logging
 from typing import Tuple, Optional
-
 import gurobipy as gp
 import numpy as np
 from gurobipy import GRB
-
 from src.models.proportional_allocation_model import solve_proportional_allocation_model
 
 logger = logging.getLogger(__name__)
 
 
-def solve_robust_model(
+def solve_robust_reformulated_model(
         pop: np.ndarray,
         immunized_pop: np.ndarray,
         active_cases: np.ndarray,
@@ -22,14 +20,15 @@ def solve_robust_model(
         gamma: float = 3.0,
         delta: float = 0.05,
         q_norm: int = 2,
-        mip_gap: float = 1e-2,
+        mip_gap: float = 1e-4,
         feasibility_tol: float = 1e-4,
-        output_flag: bool = False,
+        output_flag: bool = True,
         time_limit: int = 120
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-
     # Initialize model
     m = gp.Model("nominal")
+
+    # ------------------------- PARAMETERS AND VARIABLES ---------------------------------------------------------------
 
     # Define sets
     num_regions, num_classes = pop.shape
@@ -39,34 +38,53 @@ def solve_robust_model(
     periods = range(1, num_periods)
     logger.debug(f"Regions: {num_regions} \t Risk classes: {num_classes} \t Periods: {num_periods}")
 
-    # Define decision variables
-    vaccines = m.addVars(num_regions, num_classes, num_periods, lb=0)
-    cases = m.addVars(num_regions, num_classes, num_periods, lb=0)
-    unimmunized_pop = m.addVars(num_regions, num_classes, num_periods, lb=0)
+    # Compute analysis parameters
+    compound_rep_factor = np.zeros((num_regions, num_periods))
+    cost = np.zeros((num_regions, num_classes, num_periods))
+    compound_rep_factor[:, 0] = active_cases.sum(1)
+    for t in periods:
+        compound_rep_factor[:, t] = compound_rep_factor[:, t - 1] * rep_factor
+        for k in risk_classes:
+            cost[:, k, t] = morbidity_rate[:, k] * compound_rep_factor[:, t]
 
-    # Define analysis variables required for robust formulation
-    y = m.addVars(num_regions, num_classes, num_periods, lb=0)  #
-    l1_penalty = m.addVars(num_regions, num_classes, num_periods, lb=0)
+    # Compute robustness parameters
+    relative_error_lower_bound = np.ones(num_periods)
+    relative_error_upper_bound = np.ones(num_periods)
+    for t in periods:
+        for u in range(t):
+            relative_error_lower_bound[t] *= (1 - delta * (np.sqrt(u + 1) - np.sqrt(u))) ** (t - u + 1)
+            relative_error_upper_bound[t] *= (1 + delta * (np.sqrt(u + 1) - np.sqrt(u))) ** (t - u + 1)
+    rho = (1 + sigma) * np.max(relative_error_upper_bound) - 1
+    print(relative_error_upper_bound)
+
+    # Define decision variables
+    vaccines = m.addVars(num_regions, num_classes, num_periods)
+    unimmunized_pop = m.addVars(num_regions, num_classes, num_periods)
+    normalized_cases = m.addVars(num_regions, num_classes, num_periods)  # analysis variable for cases
+
+    # Define analysis variables for robust immunity dynamics
+    y = m.addVars(num_regions, num_classes, num_periods)
+    l1_penalty = m.addVars(num_regions, num_classes, num_periods)
     lq_dual_penalty = m.addVar()
+
+    # ------------------------- CONSTRAINTS ----------------------------------------------------------------------------
 
     # Set initial conditions constraints
     m.addConstrs(vaccines[i, k, 0] == 0 for i in regions for k in risk_classes)
-    m.addConstrs(cases[i, k, 0] == active_cases[i, k] for i in regions for k in risk_classes)
-    m.addConstrs(
-        unimmunized_pop[i, k, 0] == pop[i, k] - immunized_pop[i, k]
-        for i in regions for k in risk_classes
-    )
+    m.addConstrs(normalized_cases[i, k, 0] == 1 for i in regions for k in risk_classes)
+    m.addConstrs(unimmunized_pop[i, k, 0] == pop[i, k] - immunized_pop[i, k] for i in regions for k in risk_classes)
 
     # Set contagion dynamics constraint (bi-linear, non-convex)
     m.addConstrs(
-        cases[i, k, t] == (1 + delta / np.sqrt(t)) ** t * rep_factor[i] / pop[i].sum() * (
-                unimmunized_pop[i, k, t - 1] - vaccines[i, k, t]) * cases.sum(i, "*", t-1)
+        normalized_cases[i, k, t] == 1 / pop[i].sum() * (
+                unimmunized_pop[i, k, t - 1] - vaccines[i, k, t]) * normalized_cases.sum(i, "*", t - 1)
         for i in regions for k in risk_classes for t in periods
     )
 
     # Set immunity dynamics constraint
     m.addConstrs(
-        unimmunized_pop[i, k, t] == unimmunized_pop[i, k, t - 1] - vaccines[i, k, t] - cases[i, k, t]
+        unimmunized_pop[i, k, t] == unimmunized_pop[i, k, t - 1] - vaccines[i, k, t] -
+        relative_error_lower_bound[t] * compound_rep_factor[i, t] * normalized_cases[i, k, t]
         for i in regions for k in risk_classes for t in periods
     )
 
@@ -79,13 +97,14 @@ def solve_robust_model(
         for i in regions for t in periods
     )
 
-    # Define objective (with analysis variable constraints as required)
+    # ------------------------- OBJECTIVE ------------------------------------------------------------------------------
+
     m.addConstrs(
-        l1_penalty[i, k, t] >= sigma * morbidity_rate[i, k] * cases[i, k, t] - y[i, k, t]
+        l1_penalty[i, k, t] >= rho * cost[i, k, t] * normalized_cases[i, k, t] - y[i, k, t]
         for i in regions for k in risk_classes for t in periods
     )
     m.addConstrs(
-        l1_penalty[i, k, t] >= - sigma * morbidity_rate[i, k] * cases[i, k, t] + y[i, k, t]
+        l1_penalty[i, k, t] >= - rho * cost[i, k, t] * normalized_cases[i, k, t] + y[i, k, t]
         for i in regions for k in risk_classes for t in periods
     )
     if q_norm == 2:
@@ -99,11 +118,16 @@ def solve_robust_model(
         )
     else:
         raise NotImplementedError
-    objective = sum(morbidity_rate[i, k] * cases.sum(i, k, "*") for i in regions for k in risk_classes) + \
-        sum(l1_penalty[i, k, t] for i in regions for k in risk_classes for t in periods) + gamma * lq_dual_penalty
+
+    # Set robust objective
+    objective = sum(
+        cost[i, k, t] * normalized_cases.sum(i, k, t) + l1_penalty[i, k, t]
+        for i in regions for k in risk_classes for t in periods
+    ) + gamma * lq_dual_penalty
     m.setObjective(objective, GRB.MINIMIZE)
 
-    # Give model warm start
+    # ------------------------- WARM START & MODEL PARAMETERS ----------------------------------------------------------
+
     vaccines_warm_start, _, _, _ = solve_proportional_allocation_model(
         pop=pop,
         immunized_pop=immunized_pop,
@@ -133,8 +157,14 @@ def solve_robust_model(
 
     # Compute solutions
     vaccines = get_value(vaccines)
-    cases = get_value(cases)
     unimmunized_pop = get_value(unimmunized_pop)
+    normalized_cases = get_value(normalized_cases)
+    cases = np.array([
+        [
+            [compound_rep_factor[i, t] * normalized_cases[i, k, t] for t in range(num_periods)]
+            for k in risk_classes
+        ] for i in regions
+    ])
     deaths = np.array([
         [
             [morbidity_rate[i, k] * (0 if t == 0 else cases[i, k, t - 1]) for t in range(num_periods)]

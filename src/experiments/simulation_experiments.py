@@ -2,32 +2,22 @@ from models.folding_horizon import FoldingHorizonAllocationModel
 from models.proportional_allocation_model import solve_proportional_allocation_model
 from models.nominal_model import solve_nominal_model
 from models.robust_model import solve_robust_model
-from models.robust2_model import solve_robust2_model
-from utils.data_processing import get_toy_data_from_census_data
-from utils.load_data import process_data
+from models.robust_reformulated_model import solve_robust_reformulated_model
+from utils.data_processing import load_data
 
 import pandas as pd
-import os
 
-# PATHS census data
-POP_DATA_PATH = "../../data/census/pop-data.csv"
-LAND_AREA_DATA_PATH = "../../data/census/land-area-data.csv"
-
-# PATHS realized data
-FOLDER_PATH = "/Users/alessandropreviero/Downloads/processed_data"
-immunized_pop_data_path = os.path.join(FOLDER_PATH, "immunized_pop.csv")
-pop_data_path = os.path.join(FOLDER_PATH, "pop.csv")
-active_cases_data_path = os.path.join(FOLDER_PATH, "active_cases.csv")
-rep_factor_data_path = os.path.join(FOLDER_PATH, "rep_factor.csv")
-morbidity_data_path = os.path.join(FOLDER_PATH, "morbidity_rate.csv")
-
-USE_CENSUS_DATA = False
-USE_REAL_DATA = True
+# PATHS
+DATA_DIR = "../../data/processed/"
 
 # PARAMS
 PLANNING_HORIZON = 5
-NUM_TRIALS = 1
-NOISE_GRID = [0.05]
+NUM_TRIALS = 10
+NOISE_GRID = [
+    {"rep_factor_noise": 0.05, "morbidity_rate_noise": 0.1},
+    {"rep_factor_noise": 0.1, "morbidity_rate_noise": 0.2},
+    {"rep_factor_noise": 0.15, "morbidity_rate_noise": 0.3}
+]
 MODELS = [
     FoldingHorizonAllocationModel(
         solver=solve_proportional_allocation_model,
@@ -43,40 +33,27 @@ MODELS = [
     ),
     FoldingHorizonAllocationModel(
         solver=solve_nominal_model,
-        solver_params={"time_limit": 60, "mip_gap": 0.01, "output_flag": False},
+        solver_params={},
         planning_horizon=PLANNING_HORIZON,
         name="nominal"
     ),
     FoldingHorizonAllocationModel(
         solver=solve_robust_model,
-        solver_params={"rho": 0.1, "gamma": 3.0, "delta": 0.1, "time_limit": 60, "mip_gap": 0.01, "output_flag": False},
+        solver_params={"sigma": 0.2, "delta": 0.05},
         planning_horizon=PLANNING_HORIZON,
         name="robust"
     ),
     FoldingHorizonAllocationModel(
-        solver=solve_robust2_model,
-        solver_params={"time_limit": 60, "mip_gap": 0.01, "output_flag": False},
+        solver=solve_robust_reformulated_model,
+        solver_params={"sigma": 0.2, "delta": 0.05},
         planning_horizon=PLANNING_HORIZON,
-        name="robust2"
-    )
+        name="robust_reformulation"
+    ),
 ]
 
-if USE_CENSUS_DATA:
-    pop, immunized_pop, active_cases, rep_factor, morbidity_rate, budget = get_toy_data_from_census_data(
-        pop_data_path=POP_DATA_PATH,
-        land_area_data_path=LAND_AREA_DATA_PATH,
-        groupby_state=True,
-    )
-
-else:
-    states, regions, pop, immunized_pop, active_cases, rep_factor, morbidity_rate, budget = process_data(
-        pop_data_path,
-        rep_factor_data_path,
-        morbidity_data_path,
-        immunized_pop_data_path,
-        active_cases_data_path,
-        pct_budget=0.25)
-
+pop, immunized_pop, active_cases, rep_factor, morbidity_rate, budget = load_data(data_dir=DATA_DIR)
+rep_factor = rep_factor[:, 0]
+budget[0] = 0
 
 results = []
 for allocation_model in MODELS:
@@ -88,10 +65,11 @@ for allocation_model in MODELS:
             rep_factor=rep_factor,
             morbidity_rate=morbidity_rate,
             budget=budget,
-            noise=noise,
-            num_trials=NUM_TRIALS
+            num_trials=NUM_TRIALS,
+            **noise
         )
-pd.DataFrame(results).to_csv("simulation_results.csv")
+        print(f"Completed trials for noise {noise} and model {allocation_model.name}")
+        pd.DataFrame(results).to_csv("simulation-results-v2.csv")
 
 
 

@@ -75,6 +75,15 @@ def toy_rep_factor_model(
     return rep_factor
 
 
+def set_budget_from_pop(
+        pop: np.ndarray,
+        immunized_pop: np.ndarray,
+        active_cases: np.ndarray,
+        budget_pct: float = 0.1
+) -> np.ndarray:
+    return np.ones(int(np.round(1 / budget_pct))) * (pop - immunized_pop - active_cases).sum() * budget_pct
+
+
 def get_toy_data_from_census_data(
         pop_data_path: str,
         land_area_data_path: str,
@@ -112,3 +121,11 @@ def get_toy_data_from_census_data(
     return pop, immunized_pop, active_cases, rep_factor, morbidity_rate, budget
 
 
+def load_data(data_dir: str, budget_pct: float = 0.1) -> List[np.ndarray]:
+    data = []
+    for file_name in ["pop", "immunized_pop", "active_cases", "rep_factor", "morbidity_rate"]:
+        data.append(np.array(pd.read_csv(f"{data_dir}/{file_name}.csv", index_col=[0, 1])))
+    data.append(
+        set_budget_from_pop(pop=data[0], immunized_pop=data[1], active_cases=data[2], budget_pct=budget_pct)
+    )
+    return tuple(data)

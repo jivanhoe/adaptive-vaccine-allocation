@@ -5,6 +5,7 @@ from models.nominal_model import solve_nominal_model
 from copy import deepcopy
 from typing import List
 import numpy as np
+import  gurobipy
 
 logger = logging.getLogger(__name__)
 
@@ -13,7 +14,7 @@ class FoldingHorizonAllocationModel:
 
     def __init__(
             self,
-            solver: Callable,
+            solver: Callable = solve_nominal_model,
             solver_params: Optional[Dict[str, any]] = None,
             planning_horizon: int = 5,
             name: Optional[str] = None
@@ -31,23 +32,25 @@ class FoldingHorizonAllocationModel:
             active_cases: np.ndarray,
             rep_factor: np.ndarray,
             morbidity_rate: np.ndarray,
-            noise: float
+            rep_factor_noise: float,
+            morbiditiy_rate_noise: float,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
 
         num_regions, num_classes = immunized_pop.shape
 
-        realized_rep_factor = np.tile(rep_factor, [num_classes, 1]).T * (
-                1 + noise * np.random.randn(num_regions, num_classes))
-        realized_morbidity_rate = morbidity_rate * (1 + noise * np.random.randn(num_regions, num_classes))
+        rep_factor = rep_factor * np.maximum(1 + rep_factor_noise * np.random.randn(num_regions), 0)
+        realized_morbidity_rate = morbidity_rate * np.maximum(
+            (1 + morbiditiy_rate_noise * np.random.randn(num_regions, num_classes)), 0
+        )
 
         immunized_pop = immunized_pop + vaccines[:, :, 1]
         old_active_cases = active_cases
         for i in range(num_regions):
-            active_cases[i, :] = realized_rep_factor[i, :] / pop[i].sum() * (
+            active_cases[i, :] = rep_factor[i] / pop[i].sum() * (
                     pop[i, :] - immunized_pop[i, :]) * old_active_cases[i, :].sum()
         immunized_pop = immunized_pop + active_cases
 
-        return immunized_pop, active_cases, realized_rep_factor, realized_morbidity_rate
+        return immunized_pop, active_cases, rep_factor, realized_morbidity_rate
 
     def solve_folding_horizon(
             self,
@@ -57,7 +60,8 @@ class FoldingHorizonAllocationModel:
             rep_factor: np.ndarray,
             morbidity_rate: np.ndarray,
             budget: np.ndarray,
-            noise: float = 0,
+            rep_factor_noise: float = 0,
+            morbiditiy_rate_noise: float = 0,
             seed: int = 0
     ) -> Tuple[np.array, np.ndarray, np.ndarray, np.ndarray]:
 
@@ -88,16 +92,16 @@ class FoldingHorizonAllocationModel:
             )
 
             # Update params
-            immunized_pop, active_cases, realized_rep_factor, realized_morbidity_rate = self.update_params(
+            immunized_pop, active_cases, rep_factor, realized_morbidity_rate = self.update_params(
                 vaccines=vaccines,
                 pop=pop,
                 immunized_pop=immunized_pop,
                 active_cases=active_cases,
                 rep_factor=rep_factor,
                 morbidity_rate=morbidity_rate,
-                noise=noise
+                rep_factor_noise=rep_factor_noise,
+                morbiditiy_rate_noise=morbiditiy_rate_noise
             )
-            rep_factor = realized_rep_factor.mean(1)
 
             # Store data
             fh_vaccines[:, :, t] = vaccines[:, :, 1]
@@ -115,28 +119,34 @@ class FoldingHorizonAllocationModel:
             rep_factor: np.ndarray,
             morbidity_rate: np.ndarray,
             budget: np.ndarray,
-            noise: float = 0,
+            rep_factor_noise: float = 0,
+            morbidity_rate_noise: float = 0,
             num_trials: int = 5
     ) -> List[Dict[str, any]]:
         results = []
         for seed in range(num_trials):
-            _, _, cases, deaths = self.solve_folding_horizon(
-                pop=deepcopy(pop),
-                immunized_pop=deepcopy(immunized_pop),
-                active_cases=deepcopy(active_cases),
-                rep_factor=deepcopy(rep_factor),
-                morbidity_rate=deepcopy(morbidity_rate),
-                budget=budget,
-                noise=noise,
-                seed=seed
-            )
-            results.append(
-                dict(
-                    total_cases=cases.sum(),
-                    total_deaths=deaths.sum(),
-                    noise=noise,
-                    model=self.name,
-                    **self.solver_params
+            try:
+                _, _, cases, deaths = self.solve_folding_horizon(
+                    pop=deepcopy(pop),
+                    immunized_pop=deepcopy(immunized_pop),
+                    active_cases=deepcopy(active_cases),
+                    rep_factor=deepcopy(rep_factor),
+                    morbidity_rate=deepcopy(morbidity_rate),
+                    budget=budget,
+                    rep_factor_noise=rep_factor_noise,
+                    morbiditiy_rate_noise=morbidity_rate_noise,
+                    seed=seed
                 )
-            )
+                results.append(
+                    dict(
+                        total_cases=cases.sum(),
+                        total_deaths=deaths.sum(),
+                        rep_factor_noise=rep_factor_noise,
+                        morbidity_rate_noise=morbidity_rate_noise,
+                        model=self.name,
+                        **self.solver_params
+                    )
+                )
+            except gurobipy.GurobiError:
+                logger.info("Could not find solution for trial.")
         return results
