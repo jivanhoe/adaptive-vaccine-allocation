@@ -51,7 +51,7 @@ MODELS = [
     ),
 ]
 
-pop, immunized_pop, active_cases, rep_factor, morbidity_rate, budget = load_data(data_dir=DATA_DIR)
+pop, immunized_pop, active_cases, rep_factor, morbidity_rate, budget = load_data(data_dir=DATA_DIR, budget_pct=0.125)
 rep_factor = rep_factor[:, 0]
 budget[0] = 0
 
@@ -69,7 +69,7 @@ for allocation_model in MODELS:
             **noise
         )
         print(f"Completed trials for noise {noise} and model {allocation_model.name}")
-        pd.DataFrame(results).to_csv("simulation-results-v2.csv")
+        pd.DataFrame(results).to_csv("simulation-results-v3.csv")
 
 
 

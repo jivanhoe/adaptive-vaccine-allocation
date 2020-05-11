@@ -19,7 +19,7 @@ def solve_nominal_model(
         budget: np.ndarray,
         alpha: float = 0.0,
         mip_gap: float = 1e-2,
-        feasibility_tol: float = 1e-4,
+        feasibility_tol: float = 1e-2,
         output_flag: bool = False,
         time_limit: int = 120
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:

@@ -1,7 +1,7 @@
 import logging
 from copy import deepcopy
-from typing import Callable, Dict, Tuple, Optional
-from typing import List
+from typing import Callable, Dict, Tuple, Optional, List
+from models.nominal_model import solve_nominal_model
 
 import numpy as np
 import  gurobipy

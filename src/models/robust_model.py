@@ -23,7 +23,7 @@ def solve_robust_model(
         delta: float = 0.05,
         q_norm: int = 2,
         mip_gap: float = 1e-2,
-        feasibility_tol: float = 1e-4,
+        feasibility_tol: float = 1e-2,
         output_flag: bool = False,
         time_limit: int = 120
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
