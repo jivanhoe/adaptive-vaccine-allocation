@@ -2,7 +2,6 @@ import logging
 from copy import deepcopy
 from typing import Callable, Dict, Tuple, Optional
 from typing import List
-from models.nominal_model import solve_nominal_model
 
 import numpy as np
 import gurobipy
@@ -14,7 +13,7 @@ class FoldingHorizonAllocationModel:
 
     def __init__(
             self,
-            solver: Callable = solve_nominal_model,
+            solver: Callable,
             solver_params: Optional[Dict[str, any]] = None,
             planning_horizon: int = 5,
             name: Optional[str] = None
