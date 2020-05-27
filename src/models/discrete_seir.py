@@ -14,76 +14,115 @@ class DiscreteSEIRSolution:
             exposed: np.ndarray,
             infected: np.ndarray,
             recovered: np.ndarray,
-            deceased: Optional[np.ndarray] = None,
-            vaccinated: Optional[np.ndarray] = None,
+            deceased: np.ndarray,
+            vaccinated: np.ndarray,
+            days_per_timestep: float,
+            validate_on_init: bool = False
     ):
+        """
+        Instantiate a container object for a discrete SEIR solution that allows for easy querying and plotting.
+        :param susceptible: a numpy array of size (n_regions, n_risk_classes, n_timesteps + 1)
+        :param exposed: a numpy array of size (n_regions, n_risk_classes, n_timesteps + 1)
+        :param infected: a numpy array of size (n_regions, n_risk_classes, n_timesteps + 1)
+        :param recovered: a numpy array of size (n_regions, n_risk_classes, n_timesteps + 1)
+        :param deceased: a numpy array of size (n_regions, n_risk_classes, n_timesteps + 1)
+        :param vaccinated: a numpy array of size (n_regions, n_risk_classes, n_timesteps + 1)
+        :param days_per_timestep: a float that specifies the step size of the discretization scheme used to compute the
+            solution
+        :param validate_on_init: a boolean that specifies whether to perform automatic validation checks on the solution
+        """
         self.susceptible = susceptible
         self.exposed = exposed
         self.infected = infected
         self.recovered = recovered
         self.deceased = np.zeros(susceptible.shape) if deceased is None else deceased
         self.vaccinated = np.zeros(susceptible.shape) if vaccinated is None else vaccinated
-        self.total_population = (susceptible[:, :, 0] + exposed[:, :, 0] + infected[:, :, 0] + recovered[:, :, 0]).sum()
+        self.days_per_timestep = days_per_timestep
+
+        # Check solution
+        if validate_on_init:
+            self._validate_solution()
+
+    def _validate_solution(self) -> None:
+        """
+        Check that the provided solution arrays have valid dimensions and values.
+        :return: None
+        """
+        expected_dims = self.susceptible.shape
+        for name, array in [
+            ("susceptible", self.susceptible),
+            ("exposed", self.exposed),
+            ("infected", self.infected),
+            ("recovered", self.recovered),
+            ("deceased", self.deceased),
+            ("vaccinated", self.vaccinated),
+        ]:
+            assert array.shape == expected_dims, \
+                f"Invalid dimensions for {name} array - expected {expected_dims}, received {array.shape}"
+            assert np.all(array >= 0), f"Invalid {name} array - all values must be non-negative"
 
     def get_total_deaths(self) -> float:
         return self.deceased[:, :, -1].sum()
 
     def get_total_infections(self) -> float:
         infected = self.infected.sum(axis=(0, 1))
-        return 0.5 * (infected[1:] + infected[:-1]).sum()
+        return 0.5 * (infected[1:] + infected[:-1]).sum() * self.days_per_timestep
 
-    def plot(self, figsize: Tuple[float, float] = (15.0, 7.5), timestep: Optional[str] = None) -> plt.figure:
+    def plot(self, figsize: Tuple[float, float] = (15.0, 7.5)) -> plt.figure:
         """
         Plot a visualization of the solution showing the change in population composition over time and the cumulative
         number of infections and deaths.
         :param figsize: A tuple o that specifies the dimension of the plot
-        :param timestep:
-        :return:
+        :return: a matplotlib figure object
         """
 
         # Initialize figure
         fig, ax = plt.subplots(ncols=2, figsize=figsize)
 
         # Define plot settings
-        plot_settings = dict(linestyle="solid", marker=".", alpha=0.7)
+        plot_settings = dict(alpha=0.7, linestyle="solid", marker="" if self.days_per_timestep < 1 else ".")
+
+        # Get x-axis for plots
+        days = np.arange(self.susceptible.shape[-1]) * self.days_per_timestep
 
         # Make plot of population breakdown
+        total_pop = (self.susceptible[:, :, 0] + self.exposed[:, :, 0] + self.infected[:, :, 0] +
+                     self.recovered[:, :, 0]).sum()
         ax[0].plot(
-            self.susceptible.sum(axis=(0, 1)) / self.total_population * 100,
+            days, self.susceptible.sum(axis=(0, 1)) / total_pop * 100,
             label="Susceptible", color="tab:blue", **plot_settings
         )
         ax[0].plot(
-            (self.vaccinated.sum(axis=(0, 1)).cumsum() + self.recovered.sum(axis=(0, 1))) / self.total_population * 100,
+            days, (self.vaccinated.sum(axis=(0, 1)).cumsum() + self.recovered.sum(axis=(0, 1))) / total_pop * 100,
             label="Vaccinated or recovered", color="tab:green", **plot_settings
         )
         ax[0].plot(
-            (self.exposed + self.infected).sum(axis=(0, 1)) / self.total_population * 100,
+            days, (self.exposed + self.infected).sum(axis=(0, 1)) / total_pop * 100,
             label="Exposed or infected", color="tab:orange", **plot_settings
         )
         ax[0].plot(
-            self.deceased.sum(axis=(0, 1)) / self.total_population * 100,
+            days, self.deceased.sum(axis=(0, 1)) / total_pop * 100,
             label="Deceased", color="black", **plot_settings
         )
 
         ax[0].legend(fontsize=12)
-        ax[0].set_xlabel(timestep if timestep else "Timestep", fontsize=14)
+        ax[0].set_xlabel("Days", fontsize=14)
         ax[0].set_ylabel("% of population", fontsize=14)
-        ax[0].set_title("Population breakdown", fontsize=16)
+        ax[0].set_title("Population composition", fontsize=16)
 
         # Make plot of cumulative negative outcomes
         intfected = self.infected.sum(axis=(0, 1))
         ax[1].plot(
-            0.5 * (intfected[1:] + intfected[:-1]).cumsum(),
+            days[:-1], (0.5 * (intfected[1:] + intfected[:-1]) * self.days_per_timestep).cumsum(),
             label="Infections", color="tab:orange", **plot_settings
         )
         ax[1].plot(
-            self.deceased.sum(axis=(0, 1)),
+            days, self.deceased.sum(axis=(0, 1)),
             label="Deaths", color="black", **plot_settings
         )
         ax[1].legend(fontsize=12)
-        ax[1].set_xlabel(timestep if timestep else "Timestep", fontsize=14)
+        ax[1].set_xlabel("Days", fontsize=14)
         ax[1].set_ylabel("Cumulative total", fontsize=14)
-        total_deaths = int(self.get_total_deaths())
         ax[1].set_title("Casualties", fontsize=16)
 
 
@@ -99,25 +138,32 @@ class DiscreteSEIRModel:
             infection_rate: np.ndarray,
             progression_rate: np.ndarray,
             recovery_rate: np.ndarray,
-            death_rate: np.ndarray
+            death_rate: np.ndarray,
+            days_per_timestep: float,
     ):
         """
         Instantiate a discrete SEIR model with initial conditions and parameter estimates.
         :param initial_susceptible: a numpy array of size (n_regions, n_risk_classes) with the initial number of
-        susceptible individuals in each population subset
+            susceptible individuals in each population subset
         :param initial_exposed: a numpy array of size (n_regions, n_risk_classes) with the initial number of exposed
-        individuals in each population subset
+            individuals in each population subset
         :param initial_infected: a numpy array of size (n_regions, n_risk_classes) with the initial number of infected
-        individuals in each population subset
+            individuals in each population subset
         :param initial_recovered: a numpy array of size (n_regions, n_risk_classes) with the initial number of recovered
-        individuals in each population subset
-         :param vaccine_budget: a numpy array of size (n_timesteps,) that specifies the total number of vaccines to be
-        allocated at each timestep
-        :param infection_rate: a numpy array of size (n_regions, n_timesteps) with estimated infection rate by region
-        at each timestep
-        :param progression_rate: a numpy array of size (n_risk_classes,) with estimated progression rate by risk class
-        :param recovery_rate: a numpy array of size (n_risk_classes,) with estimated recovery rate by risk class
-        :param death_rate: a numpy array of size (n_risk_classes,) with estimated death rate by risk class
+            individuals in each population subset
+        :param vaccine_budget: a numpy array of size (n_timesteps,) that specifies the total number of vaccines to be
+            allocated at each timestep
+        :param infection_rate: a numpy array of size (n_regions, n_timesteps) with estimated infection rate by region at
+            each timestep, in units of 1/days
+        :param progression_rate: a numpy array of size (n_risk_classes,) with estimated progression rate by risk class,
+            in units of 1/days
+        :param recovery_rate: a numpy array of size (n_risk_classes,) with estimated recovery rate by risk class, in
+            units of 1/days
+        :param death_rate: a numpy array of size (n_risk_classes,) with estimated death rate by risk class, in units of
+            1/days
+        :param vaccine_budget: a numpy array of size (n_planning_periods,) that specifies the total number of vaccines
+            to be allocated across each planning period
+        :param days_per_timestep: a float that specifies the number of days in each timesteps
         """
 
         # Set initial conditions
@@ -133,6 +179,7 @@ class DiscreteSEIRModel:
         self.progression_rate = progression_rate
         self.death_rate = death_rate
         self.recovery_rate = recovery_rate
+        self.days_per_timestep = days_per_timestep
 
         # Initialize helper attributes
         self._n_regions = self.initial_susceptible.shape[0]
@@ -174,7 +221,7 @@ class DiscreteSEIRModel:
         """
         Get solution under SEIR dynamics with baseline allocation heuristic.
         :param prioritize_allocation: a boolean argument that specifies whether high-risk individuals should be
-        prioritized within each region under the allocation heuristic (default True)
+            prioritized within each region under the allocation heuristic (default True)
         :return: a DiscreteSEIRSolution object
         """
 
@@ -216,25 +263,25 @@ class DiscreteSEIRModel:
 
             # Apply forward difference scheme for each region
             for i in self._regions:
-                susceptible[i, :, t + 1] = (
-                        susceptible[i, :, t]
+                susceptible[i, :, t + 1] = susceptible[i, :, t] + (
                         - self.infection_rate[i, t] / self.population[i] * (
-                                susceptible[i, :, t] - vaccinated[i, :, t]) * infected[i, :, t].sum()
-                        - vaccinated[i, :, t]
-                )
-                exposed[i, :, t + 1] = (
-                        exposed[i, :, t]
-                        + self.infection_rate[i, t] / self.population[i] * (
-                                susceptible[i, :, t] - vaccinated[i, :, t]) * infected[i, :, t].sum()
+                        susceptible[i, :, t] - vaccinated[i, :, t]) * infected[i, :, t].sum()
+                ) * self.days_per_timestep - vaccinated[i, :, t]
+                exposed[i, :, t + 1] = exposed[i, :, t] + (
+                        self.infection_rate[i, t] / self.population[i] * (
+                        susceptible[i, :, t] - vaccinated[i, :, t]) * infected[i, :, t].sum()
                         - self.progression_rate * exposed[i, :, t]
-                )
-                infected[i, :, t + 1] = (
-                        infected[i, :, t]
-                        + self.progression_rate * exposed[i, :, t]
+                ) * self.days_per_timestep
+                infected[i, :, t + 1] = infected[i, :, t] + (
+                        self.progression_rate * exposed[i, :, t]
                         - (self.recovery_rate + self.death_rate) * infected[i, :, t]
-                )
-                recovered[i, :, t + 1] = recovered[i, :, t] + self.recovery_rate * infected[i, :, t]
-                deceased[i, :, t + 1] = deceased[i, :, t] + self.death_rate * infected[i, :, t]
+                ) * self.days_per_timestep
+                recovered[i, :, t + 1] = recovered[i, :, t] + self.recovery_rate * infected[i, :, t] * self.days_per_timestep
+                deceased[i, :, t + 1] = deceased[i, :, t] + self.death_rate * infected[i, :, t] * self.days_per_timestep
+
+            # Clip negative values caused by discretization error
+            exposed[:, :, t + 1] = np.maximum(exposed[:, :, t + 1], 0)
+            infected[:, :, t + 1] = np.maximum(infected[:, :, t + 1], 0)
 
         # Return solution object
         return DiscreteSEIRSolution(
@@ -243,7 +290,8 @@ class DiscreteSEIRModel:
             infected=infected,
             recovered=recovered,
             deceased=deceased,
-            vaccinated=vaccinated
+            vaccinated=vaccinated,
+            days_per_timestep=self.days_per_timestep
         )
 
     def _get_variable_value(self, solver: gp.Model, variable: gp.tupledict) -> np.array:
@@ -268,12 +316,12 @@ class DiscreteSEIRModel:
     ) -> DiscreteSEIRSolution:
         """
         Solve
-        :param fairness_param:
-        :param mip_gap: a float that specifies the maximi
-        :param feasibility_tol: a float that specifies that maximum tolerance
-        :param output_flag: a boolean that specifies whether
-        (default False)
-        :param time_limit:
+        :param fairness_param: a float that specifies the minimum proportion of the susceptible population in each
+            region that must be allocated a vaccine (default 0)
+        :param mip_gap: a float that specifies the maximum MIP gap required for termination (default 1e-2)
+        :param feasibility_tol: a float that specifies that maximum feasibility tolerance for constraints (default 1e-2)
+        :param output_flag: a boolean that specifies whether to show the solver logs (default False)
+        :param time_limit: a float that specifies the maximum solve time in seconds (default 120.0)
         :return: a DiscreteSEIRSolution object
         """
 
@@ -281,9 +329,9 @@ class DiscreteSEIRModel:
         solver = gp.Model("SEIR")
 
         # Define variables
-        susceptible = solver.addVars(self._n_regions, self._n_risk_classes, self._n_timesteps + 1, lb=0)
-        exposed = solver.addVars(self._n_regions, self._n_risk_classes, self._n_timesteps + 1, lb=0)
-        infected = solver.addVars(self._n_regions, self._n_risk_classes, self._n_timesteps + 1, lb=0)
+        susceptible = solver.addVars(self._n_regions, self._n_risk_classes, self._n_timesteps + 1)
+        exposed = solver.addVars(self._n_regions, self._n_risk_classes, self._n_timesteps + 1)
+        infected = solver.addVars(self._n_regions, self._n_risk_classes, self._n_timesteps + 1)
         recovered = solver.addVars(self._n_regions, self._n_risk_classes, self._n_timesteps + 1, lb=0)
         deceased = solver.addVars(self._n_regions, self._n_risk_classes, self._n_timesteps + 1, lb=0)
         vaccinated = solver.addVars(self._n_regions, self._n_risk_classes, self._n_timesteps + 1, lb=0)
@@ -316,41 +364,43 @@ class DiscreteSEIRModel:
 
         # Set constraints for SEIR dynamics
         solver.addConstrs(
-            susceptible[i, k, t + 1] - susceptible[i, k, t] == (
-                    -self.infection_rate[i, t] / self.population[i] * susceptible[i, k, t] * infected.sum(i, "*", t)
-            ) for i in self._regions for k in self._risk_classes for t in self._non_planning_timesteps
+            susceptible[i, k, t + 1] == susceptible[i, k, t] - vaccinated[i, k, t] - self.infection_rate[i, t] /
+            self.population[i] * (susceptible[i, k, t] - vaccinated[i, k, t]) * infected.sum(i, "*", t)
+            * self.days_per_timestep
+            for i in self._regions for k in self._risk_classes for t in self._planning_timesteps
         )
         solver.addConstrs(
-            susceptible[i, k, t + 1] - susceptible[i, k, t] == (
-                    -self.infection_rate[i, t] / self.population[i] * (
-                        susceptible[i, k, t] - vaccinated[i, k, t]) * infected.sum(i, "*", t)
-                    - vaccinated[i, k, t]
-            ) for i in self._regions for k in self._risk_classes for t in self._planning_timesteps
+            susceptible[i, k, t + 1] == susceptible[i, k, t] - self.infection_rate[i, t] / self.population[i]
+            * susceptible[i, k, t] * infected.sum(i, "*", t) * self.days_per_timestep
+            for i in self._regions for k in self._risk_classes for t in self._non_planning_timesteps
         )
         solver.addConstrs(
-            exposed[i, k, t + 1] - exposed[i, k, t] == (
-                    susceptible[i, k, t] - susceptible[i, k, t + 1] - vaccinated[i, k, t]
-                    - self.progression_rate[k] * exposed[i, k, t]
-            ) for i in self._regions for k in self._risk_classes for t in self._timesteps
+            exposed[i, k, t + 1] == exposed[i, k, t] - susceptible[i, k, t + 1] + susceptible[i, k, t]
+            - vaccinated[i, k, t] - self.progression_rate[k] * exposed[i, k, t] * self.days_per_timestep
+            for i in self._regions for k in self._risk_classes for t in self._planning_timesteps
         )
         solver.addConstrs(
-            infected[i, k, t + 1] - infected[i, k, t] == (
-                    self.progression_rate[k] * exposed[i, k, t]
-                    - (self.recovery_rate[k] + self.death_rate[k]) * infected[i, k, t]
-            ) for i in self._regions for k in self._risk_classes for t in self._timesteps
+            exposed[i, k, t + 1] == exposed[i, k, t] - susceptible[i, k, t + 1] + susceptible[i, k, t]
+            - self.progression_rate[k] * exposed[i, k, t] * self.days_per_timestep
+            for i in self._regions for k in self._risk_classes for t in self._non_planning_timesteps
         )
         solver.addConstrs(
-            recovered[i, k, t + 1] - recovered[i, k, t] == self.recovery_rate[k] * infected[i, k, t]
+            infected[i, k, t + 1] == infected[i, k, t] + self.progression_rate[k] * exposed[i, k, t] * self.days_per_timestep
+            - (self.recovery_rate[k] + self.death_rate[k]) * infected[i, k, t] * self.days_per_timestep
             for i in self._regions for k in self._risk_classes for t in self._timesteps
         )
         solver.addConstrs(
-            deceased[i, k, t + 1] - deceased[i, k, t] >= self.death_rate[k] * infected[i, k, t]
+            recovered[i, k, t + 1] >= recovered[i, k, t] + self.recovery_rate[k] * infected[i, k, t] * self.days_per_timestep
+            for i in self._regions for k in self._risk_classes for t in self._timesteps
+        )
+        solver.addConstrs(
+            deceased[i, k, t + 1] >= deceased[i, k, t] + self.death_rate[k] * infected[i, k, t] * self.days_per_timestep
             for i in self._regions for k in self._risk_classes for t in self._timesteps
         )
 
         # Set resource constraints
         solver.addConstrs(
-            vaccinated.sum("*", "*", t) <= self.vaccine_budget[t]
+            vaccinated.sum("*", "*", t) == self.vaccine_budget[t]
             for t in self._planning_timesteps
         )
         solver.addConstrs(
@@ -385,7 +435,8 @@ class DiscreteSEIRModel:
             infected=self._get_variable_value(solver=solver, variable=infected),
             recovered=self._get_variable_value(solver=solver, variable=recovered),
             vaccinated=self._get_variable_value(solver=solver, variable=vaccinated),
-            deceased=self._get_variable_value(solver=solver, variable=deceased)
+            deceased=self._get_variable_value(solver=solver, variable=deceased),
+            days_per_timestep=self.days_per_timestep
         )
 
 
@@ -398,7 +449,7 @@ class RandomSEIRData:
             n_timesteps: int,
             planning_period: int,
             days_per_timestep: float = 1.0,
-            vaccine_budget_pct: float = 1e-1,
+            vaccine_budget_pct: float = 0.1,
             population_subset_range: Tuple[float, float] = (1e3, 5e3),
             initial_pct_exposed_range: Tuple[float, float] = (0.01, 0.05),
             initial_pct_infected_range: Tuple[float, float] = (0.01, 0.05),
@@ -408,6 +459,7 @@ class RandomSEIRData:
             recovery_rate_range: Tuple[float, float] = (0.1, 0.2),
             death_rate_range: Tuple[float, float] = (0.05, 0.1)
     ):
+
         # Attributes for problem size and difficulty
         self.n_regions = n_regions
         self.n_risk_classes = n_risk_classes
@@ -432,6 +484,7 @@ class RandomSEIRData:
         self._validate_inputs()
 
     def _validate_inputs(self) -> None:
+
         # Validate ranges independently
         for name, range_ in [
             ("population subset", self.progression_rate_range),
@@ -447,7 +500,6 @@ class RandomSEIRData:
             assert range_[0] >= 0, f"Invalid {name} range - min must be non-negative."
 
         # Validate initial condition ranges
-
         assert self.initial_pct_exposed_range[1] + self.initial_pct_infected_range[1] + \
             self.initial_pct_recovered_range[1] < 1, \
             "Invalid ranges initial conditions - max proportion of exposed, infected and recovered must be less than 1."
@@ -464,10 +516,14 @@ class RandomSEIRData:
         return std * np.random.rand(*dims) + mean
 
     def _generate_initial_conditions(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+
+        # Generate population subset sizes
         population = RandomSEIRData._uniform(
             *self.population_subset_range,
             dims=(self.n_regions, self.n_risk_classes)
         )
+
+        # Generate exposed, infected and recovered populations for each subset
         initial_exposed = RandomSEIRData._uniform(
             *self.initial_pct_exposed_range,
             dims=(self.n_regions, self.n_risk_classes)
@@ -480,7 +536,11 @@ class RandomSEIRData:
             *self.initial_pct_recovered_range,
             dims=(self.n_regions, self.n_risk_classes)
         ) * population
+
+        # Infer susceptible population for subset
         initial_susceptible = population - initial_exposed - initial_infected - initial_recovered
+
+        # Return initial conditions
         return initial_susceptible, initial_exposed, initial_infected, initial_recovered
 
     def _get_vaccine_budget(self, initial_susceptible: np.ndarray) -> np.ndarray:
@@ -496,28 +556,28 @@ class RandomSEIRData:
         infection_rate = RandomSEIRData._uniform(
             *self.infection_rate_range,
             dims=(self.n_regions,)
-        ) * self.days_per_timestep
+        )
         infection_rate = np.tile(infection_rate, reps=(self.n_timesteps, 1)).T
 
         # Generate uniformly distributed death rates and sort in descending order
         progression_rate = RandomSEIRData._uniform(
             *self.progression_rate_range,
             dims=(self.n_risk_classes,)
-        ) * self.days_per_timestep
+        )
         progression_rate = np.sort(progression_rate)[::-1]
 
         # Generate uniformly distributed death rates and sort in ascending order
         recovery_rate = RandomSEIRData._uniform(
             *self.recovery_rate_range,
             dims=(self.n_risk_classes,)
-        ) * self.days_per_timestep
+        )
         recovery_rate = np.sort(recovery_rate)
 
         # Generate uniformly distributed death rates and sort in descending order
         death_rate = RandomSEIRData._uniform(
             *self.death_rate_range,
             dims=(self.n_risk_classes,)
-        ) * self.days_per_timestep
+        )
         death_rate = np.sort(death_rate)[::-1]
 
         # Return parameters
@@ -546,5 +606,6 @@ class RandomSEIRData:
             progression_rate=progression_rate,
             recovery_rate=recovery_rate,
             death_rate=death_rate,
-            vaccine_budget=vaccine_budget
+            vaccine_budget=vaccine_budget,
+            days_per_timestep=self.days_per_timestep
         )
