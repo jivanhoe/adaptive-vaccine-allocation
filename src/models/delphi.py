@@ -621,7 +621,7 @@ class PrescriptiveDELPHIModel:
                 # Terminate if solution convergences
                 objective_change = abs(previous_objective - incumbent_objective)
                 estimated_infectious_change = np.abs(previous_solution.infectious.sum(axis=1)
-                                               - incumbent_solution.infectious.sum(axis=1)).sum()
+                                                - incumbent_solution.infectious.sum(axis=1)).sum()
                 if max(objective_change, estimated_infectious_change) < termination_tol:
                     trajectory.append(incumbent_objective)
                     if log:

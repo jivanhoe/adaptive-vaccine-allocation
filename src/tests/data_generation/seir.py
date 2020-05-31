@@ -1,6 +1,6 @@
 from typing import Tuple
-
 import numpy as np
+from src.models.seir import DiscreteSEIRModel
 
 
 class RandomSEIRData:
