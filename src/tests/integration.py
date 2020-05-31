@@ -11,15 +11,15 @@ model = data_generator.generate_model()
 solution, trajectories = model.solve(
     exploration_tol=0.02,
     termination_tol=1,
-    n_restarts=10,
-    max_iterations=5,
+    n_restarts=1,
+    max_iterations=2,
     output_flag=False,
     log=True
 )
 
 vaccines = solution.vaccinated
 old_objective = solution.get_total_deaths()
-new_vaccine, objective, bound = model.solve_benchmark(vaccines)
+new_vaccine, objective, bound = model.solve_benchmark(vaccines, check_warm_start_feasibility=True)
 
 new_objective = model.simulate(new_vaccine)
 print(old_objective, new_objective)

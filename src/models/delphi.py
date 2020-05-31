@@ -661,7 +661,7 @@ class PrescriptiveDELPHIModel:
             time_limit: Optional[float] = None,
             output_flag: bool = False,
             check_warm_start_feasibility: bool = True,
-            log: bool = False
+            log: bool = True
     ):
 
         # Initialize model
@@ -799,9 +799,9 @@ class PrescriptiveDELPHIModel:
         solver.params.OutputFlag = output_flag
 
         # Check feasibility of warm start
-        expected_dims = (self._n_regions, self._n_risk_classes, self._n_timesteps + 1)
+        expected_dims = (self._n_regions, self._n_risk_classes, self._n_timesteps)
         if check_warm_start_feasibility:
-            assert initial_vaccinated, f"Invalid argument type for initial_vaccinated - " \
+            assert initial_vaccinated is not None, f"Invalid argument type for initial_vaccinated - " \
                                        f"got {type(initial_vaccinated)}, expected{type(np.array([]))}"
 
             assert initial_vaccinated.shape == expected_dims, \
@@ -824,18 +824,18 @@ class PrescriptiveDELPHIModel:
                 if log:
                     logger.info(f"Found {sum(constraint_inf)} out of {len(constraint_inf)} violated constraints")
                     logger.info(f"Solving model {solver.getAttr('ModelName')}, without user-provided warm start")
-                    solver.setAttr(GRB.Attr.LB, vaccinated, 0)
-                    solver.setAttr(GRB.Attr.UB, vaccinated, GRB.INFINITY)
-                    solver.update()
-                    solver.optimize()
-                    best_bound = solver.ObjBound()
-                    vaccines = self._get_variable_value(solver=solver, variable=vaccinated)
-                    try:
-                        best_objective = solver.ObjVal()
-                    except GurobiError:
-                        best_objective = None
+                solver.setAttr(GRB.Attr.LB, vaccinated, 0)
+                solver.setAttr(GRB.Attr.UB, vaccinated, GRB.INFINITY)
+                solver.update()
+                solver.optimize()
+                best_bound = solver.ObjBound()
+                vaccines = self._get_variable_value(solver=solver, variable=vaccinated)
+                try:
+                    best_objective = solver.ObjVal()
+                except GurobiError:
+                    best_objective = None
 
-                    return vaccines, best_objective, best_bound
+                return vaccines, best_objective, best_bound
 
             elif solver.status == GRB.Status.OPTIMAL:
                 if log:
