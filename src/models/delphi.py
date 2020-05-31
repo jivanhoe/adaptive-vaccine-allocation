@@ -828,12 +828,13 @@ class PrescriptiveDELPHIModel:
                 solver.setAttr(GRB.Attr.UB, vaccinated, GRB.INFINITY)
                 solver.update()
                 solver.optimize()
-                best_bound = solver.ObjBound()
-                vaccines = self._get_variable_value(solver=solver, variable=vaccinated)
+                best_bound = solver.ObjBound
                 try:
-                    best_objective = solver.ObjVal()
+                    best_objective = solver.ObjVal
+                    vaccines = self._get_variable_value(solver=solver, variable=vaccinated)
                 except GurobiError:
                     best_objective = None
+                    vaccines = None
 
                 return vaccines, best_objective, best_bound
 

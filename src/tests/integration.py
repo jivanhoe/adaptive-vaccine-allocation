@@ -19,8 +19,12 @@ solution, trajectories = model.solve(
 
 vaccines = solution.vaccinated
 old_objective = solution.get_total_deaths()
-new_vaccine, objective, bound = model.solve_benchmark(vaccines, check_warm_start_feasibility=True)
+new_vaccine, objective, bound = model.solve_benchmark(vaccines, output_flag=False, time_limit=60, check_warm_start_feasibility=True)
 
-new_objective = model.simulate(new_vaccine)
-print(old_objective, new_objective)
+print(f"Best objective from heuristic:{old_objective}")
 
+if new_vaccine is not None:
+    new_objective = model.simulate(new_vaccine)
+    print(f"Found improved objective: {new_objective.get_total_deaths()}")
+else:
+    print(f"No feasible objective found - best lower bound: {bound}")
