@@ -120,10 +120,10 @@ class DiscreteDELPHISolution:
         # Define plot settings
         plot_settings = dict(alpha=0.7, linestyle="solid", marker="" if self.days_per_timestep < 2 else ".")
 
-        # Get x-axis for plots
-        days = np.arange(self.susceptible.shape[-1]) * self.days_per_timestep
-
-        total_pop = self.population.sum()
+        # Plot population breakdown
+        n_timesteps = self.susceptible.shape[-1]
+        days = np.arange(n_timesteps) * self.days_per_timestep
+        total_pop = (np.tile(self.population, reps=(n_timesteps, 1)).T - self.deceased.sum(axis=1)).sum(axis=0)
         ax[0].plot(
             days, self.susceptible.sum(axis=(0, 1)) / total_pop * 100,
             label="Susceptible", color="tab:blue", **plot_settings
@@ -135,39 +135,28 @@ class DiscreteDELPHISolution:
             label="Vaccinated or recovered", color="tab:green", **plot_settings
         )
         ax[0].plot(
-            days, (self.exposed + self.infectious + self.hospitalized + self.quarantined + self.undetected
-                   ).sum(axis=(0, 1)) / total_pop * 100,
-            label="Exposed or infected", color="tab:orange", **plot_settings
+            days, (self.exposed + self.infectious).sum(axis=(0, 1)) / total_pop * 100,
+            label="Exposed or infectious", color="tab:red", **plot_settings
         )
         ax[0].plot(
-            days, self.deceased.sum(axis=(0, 1)) / total_pop * 100,
-            label="Deceased", color="black", **plot_settings
+            days, (self.hospitalized + self.quarantined + self.undetected).sum(axis=(0, 1)) / total_pop * 100,
+            label="Hospitalized, quarantined or undetected", color="tab:orange", **plot_settings
         )
-
+        ax[0].axhline(0, color="black", alpha=0.5, linestyle="--")
+        ax[0].axhline(100, color="black", alpha=0.5, linestyle="--")
         ax[0].legend(fontsize=12)
         ax[0].set_xlabel("Days", fontsize=14)
         ax[0].set_ylabel("% of population", fontsize=14)
         ax[0].set_title("Population composition", fontsize=16)
 
-        # Make plot of cumulative negative outcomes
-        infectious = self.infectious.sum(axis=(0, 1))
-        hospitalized = self.hospitalized.sum(axis=(0, 1))
-        ax[1].plot(
-            days[:-1], (0.5 * (infectious[1:] + infectious[:-1]) * self.days_per_timestep).cumsum(),
-            label="Infections", color="tab:orange", **plot_settings
-        )
-        ax[1].plot(
-            days[:-1], (0.5 * (hospitalized[1:] + hospitalized[:-1]) * self.days_per_timestep).cumsum(),
-            label="Hospitalizations", color="tab:red", **plot_settings
-        )
+        # Make plot of cumulative deaths
         ax[1].plot(
             days, self.deceased.sum(axis=(0, 1)),
             label="Deaths", color="black", **plot_settings
         )
-        ax[1].legend(fontsize=12)
         ax[1].set_xlabel("Days", fontsize=14)
-        ax[1].set_ylabel("Cumulative total", fontsize=14)
-        ax[1].set_title("Casualties", fontsize=16)
+        ax[1].set_ylabel("Cumulative total (k)", fontsize=14)
+        ax[1].set_title("Deaths", fontsize=16)
 
 
 class PrescriptiveDELPHIModel:
@@ -210,6 +199,7 @@ class PrescriptiveDELPHIModel:
         self.iur_transition_rate = params["iur_transition_rate"]
         self.death_rate = params["death_rate"]
         self.recovery_rate = params["recovery_rate"]
+        self.mortality_rate = params["mortality_rate"]
         self.days_per_timestep = params["days_per_timestep"]
 
         # Initialize helper attributes
@@ -232,14 +222,17 @@ class PrescriptiveDELPHIModel:
             self,
             vaccinated: Optional[np.ndarray] = None,
             randomize_allocation: bool = False,
-            fairness_param: float = 0.0
+            min_allocation_pct: float = 0.0,
+            max_allocation_pct: float = 1.0
     ) -> DiscreteDELPHISolution:
         """
         Solve DELPHI system using a forward difference scheme.
         :param vaccinated: a numpy array of (n_regions, n_classes, n_timesteps + 1) that represents a feasible
             allocation of vaccines by region and risk class at each timestep
-        :param fairness_param: a float that specifies the minimum proportion of the susceptible population in each
-            region that must be allocated a vaccine (default 0)
+        :param min_allocation_pct: a float that specifies the minimum proportion of the susceptible population in each
+            region that must be allocated a vaccine (default 0.0)
+        :param max_allocation_pct: a float that specifies the maximum proportion of the susceptible population in each
+            region that may be allocated a vaccine (default 1.0)
         :param randomize_allocation: a bool that specifies whether to randomize the allocation policy if none provided
             (default False)
         :return: a DiscreteDELPHISolution object
@@ -285,11 +278,16 @@ class PrescriptiveDELPHIModel:
 
                 # If random allocation specified, generate feasible allocation
                 if randomize_allocation:
-                    min_vaccinated = fairness_param * susceptible[:, :, t]
+                    min_vaccinated = min_allocation_pct * susceptible[:, :, t]
                     additional_budget = self.vaccine_budget[t] - min_vaccinated.sum()
                     additional_proportion = np.random.exponential(size=(self._n_regions, self._n_risk_classes)) ** 2
                     additional_proportion = additional_proportion / additional_proportion.sum()
-                    vaccinated[:, :, t] = min_vaccinated + additional_proportion * additional_budget
+                    additional_proportion = np.maximum(additional_proportion, max_allocation_pct)
+                    additional_proportion = additional_proportion / additional_proportion.sum()
+                    vaccinated[:, :, t] = np.minimum(
+                        min_vaccinated + additional_proportion * additional_budget,
+                        susceptible[:, :, t]
+                    )
 
                 # Else use baseline policy that orders region-wise allocation by risk class
                 else:
@@ -385,7 +383,8 @@ class PrescriptiveDELPHIModel:
             estimated_infectious: np.ndarray,
             exploration_rel_tol: float,
             exploration_abs_tol: float,
-            fairness_param: float,
+            min_allocation_pct: float,
+            max_allocation_pct: float,
             mip_gap: Optional[float],
             feasibility_tol: Optional[float],
             time_limit: Optional[float],
@@ -396,12 +395,14 @@ class PrescriptiveDELPHIModel:
         :param estimated_infectious: numpy array of size (n_regions, k_classes, t_timesteps + 1) represents the
             estimated infectious population by region and risk class at each timestep, based on a previous feasible
             solution
-         :param exploration_rel_tol: a float in [0, 1] that specifies maximum allowed relative error between the
+        :param exploration_rel_tol: a float in [0, 1] that specifies maximum allowed relative error between the
             estimated  and actual infectious population in any region (default 0.1)
         :param exploration_abs_tol: a float  that specifies maximum allowed absolute error between the
             estimated and actual infectious population in any region (default 10.0)
-        :param fairness_param: a float that specifies the minimum proportion of the susceptible population in each
+        :param min_allocation_pct: a float that specifies the minimum proportion of the susceptible population in each
             region that must be allocated a vaccine
+        :param max_allocation_pct: a float that specifies the maximum proportion of the susceptible population in each
+            region that may be allocated a vaccine
         :param mip_gap: a float that specifies the maximum MIP gap required for termination
         :param feasibility_tol: a float that specifies that maximum feasibility tolerance for constraints
         :param output_flag: a boolean that specifies whether to show the solver logs
@@ -485,7 +486,6 @@ class PrescriptiveDELPHIModel:
             exposed[j, k, t + 1] - exposed[j, k, t] >= (
                     self.infection_rate[j] * self.policy_response[j, t] / self.population[j] * susceptible[j, k, t]
                     * (1 + exploration_rel_tol) * estimated_infectious[j, t]
-                    #* max((1 + exploration_rel_tol) * estimated_infectious[j, t], exploration_abs_tol)
                     - self.progression_rate * exposed[j, k, t]
             ) * self.days_per_timestep
             for j in self._regions for k in self._risk_classes for t in self._non_planning_timesteps
@@ -549,7 +549,11 @@ class PrescriptiveDELPHIModel:
             for t in self._planning_timesteps
         )
         solver.addConstrs(
-            vaccinated.sum(j, "*", t) >= fairness_param * susceptible.sum(j, "*", t)
+            vaccinated.sum(j, "*", t) >= min_allocation_pct * susceptible.sum(j, "*", t)
+            for j in self._regions for t in self._planning_timesteps
+        )
+        solver.addConstrs(
+            vaccinated.sum(j, "*", t) <= max_allocation_pct * self.population[j]
             for j in self._regions for t in self._planning_timesteps
         )
 
@@ -584,7 +588,8 @@ class PrescriptiveDELPHIModel:
             exploration_rel_tol: float = 0.1,
             exploration_abs_tol: float = 10.0,
             termination_tol: float = 1e-2,
-            fairness_param: float = 0.0,
+            min_allocation_pct: float = 0.0,
+            max_allocation_pct: float = 1.0,
             mip_gap: Optional[float] = None,
             feasibility_tol: Optional[float] = None,
             time_limit: Optional[float] = None,
@@ -601,8 +606,10 @@ class PrescriptiveDELPHIModel:
         :param exploration_abs_tol: a float  that specifies maximum allowed absolute error between the
             estimated and actual infectious population in any region (default 10.0)
         :param termination_tol:
-        :param fairness_param: a float that specifies the minimum proportion of the susceptible population in each
+        :param min_allocation_pct: a float that specifies the minimum proportion of the susceptible population in each
             region that must be allocated a vaccine (default 0.0)
+        :param max_allocation_pct: a float that specifies the maximum proportion of the susceptible population in each
+            region that may be allocated a vaccine (default 1.0)
         :param mip_gap: a float that specifies the maximum MIP gap required for termination  (default 1e-2)
         :param feasibility_tol: a float that specifies that maximum feasibility tolerance for constraints (default 1e-2)
         :param time_limit: a float that specifies the maximum solve time in seconds (default 30.0)
@@ -625,7 +632,11 @@ class PrescriptiveDELPHIModel:
 
             # Initialize a feasible solution
             trajectory = []
-            incumbent_solution = self.simulate(randomize_allocation=True, fairness_param=fairness_param)
+            incumbent_solution = self.simulate(
+                randomize_allocation=True,
+                min_allocation_pct=min_allocation_pct,
+                max_allocation_pct=max_allocation_pct
+            )
             incumbent_objective = incumbent_solution.get_objective()
 
             if log:
@@ -638,16 +649,22 @@ class PrescriptiveDELPHIModel:
                 trajectory.append(incumbent_objective)
 
                 # Re-optimize vaccine allocation by solution linearized relaxation
-                vaccinated = self._optimize_relaxation(
-                    estimated_infectious=incumbent_solution.infectious.sum(axis=1),
-                    exploration_rel_tol=exploration_rel_tol,
-                    exploration_abs_tol=exploration_abs_tol,
-                    fairness_param=fairness_param,
-                    mip_gap=mip_gap,
-                    feasibility_tol=feasibility_tol,
-                    time_limit=time_limit,
-                    output_flag=output_flag
-                )
+                try:
+                    vaccinated = self._optimize_relaxation(
+                        estimated_infectious=incumbent_solution.infectious.sum(axis=1),
+                        exploration_rel_tol=exploration_rel_tol,
+                        exploration_abs_tol=exploration_abs_tol,
+                        min_allocation_pct=min_allocation_pct,
+                        max_allocation_pct=max_allocation_pct,
+                        mip_gap=mip_gap,
+                        feasibility_tol=feasibility_tol,
+                        time_limit=time_limit,
+                        output_flag=output_flag
+                    )
+                except GurobiError:
+                    if log:
+                        print("Infeasible relaxation - terminating search")
+                    break
 
                 # Update incumbent solution
                 previous_solution, incumbent_solution = incumbent_solution, self.simulate(vaccinated=vaccinated)
@@ -663,7 +680,7 @@ class PrescriptiveDELPHIModel:
                 if max(objective_change, estimated_infectious_change) < termination_tol:
                     trajectory.append(incumbent_objective)
                     if log:
-                        print("No improvement found - terminating trial")
+                        print("No improvement found - terminating search")
                     break
 
             # Store trajectory for completed trial
