@@ -8,9 +8,6 @@ from gurobipy import GRB
 
 import logging
 
-logger = logging.getLogger(__name__)
-gp.Env()
-
 
 class DiscreteDELPHISolution:
 
@@ -123,23 +120,22 @@ class DiscreteDELPHISolution:
         # Plot population breakdown
         n_timesteps = self.susceptible.shape[-1]
         days = np.arange(n_timesteps) * self.days_per_timestep
-        total_pop = (np.tile(self.population, reps=(n_timesteps, 1)).T - self.deceased.sum(axis=1)).sum(axis=0)
         ax[0].plot(
-            days, self.susceptible.sum(axis=(0, 1)) / total_pop * 100,
+            days, self.susceptible.sum(axis=(0, 1)) / self.population.sum() * 100,
             label="Susceptible", color="tab:blue", **plot_settings
         )
         ax[0].plot(
             days,
             (np.minimum(self.vaccinated, self.susceptible).sum(axis=(0, 1)).cumsum()
-             + self.recovered.sum(axis=(0, 1))) / total_pop * 100,
+             + self.recovered.sum(axis=(0, 1))) / self.population.sum() * 100,
             label="Vaccinated or recovered", color="tab:green", **plot_settings
         )
         ax[0].plot(
-            days, (self.exposed + self.infectious).sum(axis=(0, 1)) / total_pop * 100,
+            days, (self.exposed + self.infectious).sum(axis=(0, 1)) / self.population.sum() * 100,
             label="Exposed or infectious", color="tab:red", **plot_settings
         )
         ax[0].plot(
-            days, (self.hospitalized + self.quarantined + self.undetected).sum(axis=(0, 1)) / total_pop * 100,
+            days, (self.hospitalized + self.quarantined + self.undetected).sum(axis=(0, 1)) / self.population.sum() * 100,
             label="Hospitalized, quarantined or undetected", color="tab:orange", **plot_settings
         )
         ax[0].axhline(0, color="black", alpha=0.5, linestyle="--")
@@ -148,6 +144,7 @@ class DiscreteDELPHISolution:
         ax[0].set_xlabel("Days", fontsize=14)
         ax[0].set_ylabel("% of population", fontsize=14)
         ax[0].set_title("Population composition", fontsize=16)
+        ax[0].set_ylim([-5, 105])
 
         # Make plot of cumulative deaths
         ax[1].plot(
@@ -299,11 +296,11 @@ class PrescriptiveDELPHIModel:
             # Apply Euler forward difference scheme with clipping of negative values
             for j in self._regions:
                 susceptible[j, :, t + 1] = susceptible[j, :, t] - vaccinated[j, :, t] - (
-                        self.infection_rate[j] * self.policy_response[j, t] / self.population[j]
+                        self.infection_rate[j] * self.policy_response[j, t] / self.population[j, :].sum()
                         * (susceptible[j, :, t] - vaccinated[j, :, t]) * infectious[j, :, t].sum()
                 ) * self.days_per_timestep
                 exposed[j, :, t + 1] = exposed[j, :, t] + (
-                        self.infection_rate[j] * self.policy_response[j, t] / self.population[j]
+                        self.infection_rate[j] * self.policy_response[j, t] / self.population[j, :].sum()
                         * (susceptible[j, :, t] - vaccinated[j, :, t]) * infectious[j, :, t].sum()
                         - self.progression_rate * exposed[j, :, t]
                 ) * self.days_per_timestep
@@ -388,6 +385,7 @@ class PrescriptiveDELPHIModel:
             mip_gap: Optional[float],
             feasibility_tol: Optional[float],
             time_limit: Optional[float],
+            disable_crossover: bool,
             output_flag: bool
     ) -> np.ndarray:
         """
@@ -406,6 +404,8 @@ class PrescriptiveDELPHIModel:
         :param mip_gap: a float that specifies the maximum MIP gap required for termination
         :param feasibility_tol: a float that specifies that maximum feasibility tolerance for constraints
         :param output_flag: a boolean that specifies whether to show the solver logs
+        :param disable_crossover: a boolean that if true disables Gurobi's crossover algorithm, which used to clean up
+            the interior solution of the barrier method into a basic feasible solution
         :param time_limit: a float that specifies the maximum solve time in seconds
         :return: a numpy array of size (n_regions, k_classes, t_timesteps + 1) that represents the updated vaccine
             allocations
@@ -423,7 +423,9 @@ class PrescriptiveDELPHIModel:
         undetected_dying = solver.addVars(self._n_regions, self._n_risk_classes, self._n_timesteps + 1, lb=0)
         deceased = solver.addVars(self._n_regions, self._n_risk_classes, self._n_timesteps + 1, lb=0)
         vaccinated = solver.addVars(self._n_regions, self._n_risk_classes, self._n_timesteps + 1, lb=0)
-        infectious_error = solver.addVars(self._n_regions, self._n_timesteps + 1, lb=0)
+        infectious_error = solver.addVars(self._n_regions, self._n_timesteps, lb=0)
+        surplus_vaccines = solver.addVars(self._n_regions, self._n_risk_classes, lb=0)
+        unallocated_vaccines = solver.addVars(self._n_timesteps, lb=0)
 
         # Set initial conditions for DELPHI model
         solver.addConstrs(
@@ -462,20 +464,20 @@ class PrescriptiveDELPHIModel:
         # Set DELPHI dynamics constraints
         solver.addConstrs(
             susceptible[j, k, t + 1] - susceptible[j, k, t] + vaccinated[j, k, t] >=
-            - self.infection_rate[j] * self.policy_response[j, t] / self.population[j]
+            - self.infection_rate[j] * self.policy_response[j, t] / self.population[j, :].sum()
             * (susceptible[j, k, t] - vaccinated[j, k, t])
             * (1 - exploration_rel_tol) * estimated_infectious[j, t] * self.days_per_timestep
             for j in self._regions for k in self._risk_classes for t in self._planning_timesteps
         )
         solver.addConstrs(
             susceptible[j, k, t + 1] - susceptible[j, k, t] >=
-            - self.infection_rate[j] * self.policy_response[j, t] / self.population[j] * susceptible[j, k, t]
+            - self.infection_rate[j] * self.policy_response[j, t] / self.population[j, :].sum() * susceptible[j, k, t]
             * (1 - exploration_rel_tol) * estimated_infectious[j, t] * self.days_per_timestep
             for j in self._regions for k in self._risk_classes for t in self._non_planning_timesteps
         )
         solver.addConstrs(
             exposed[j, k, t + 1] - exposed[j, k, t] >= (
-                    self.infection_rate[j] * self.policy_response[j, t] / self.population[j]
+                    self.infection_rate[j] * self.policy_response[j, t] / self.population[j, :].sum()
                     * (susceptible[j, k, t] - vaccinated[j, k, t])
                     * (1 + exploration_rel_tol) * estimated_infectious[j, t]
                     - self.progression_rate * exposed[j, k, t]
@@ -484,8 +486,8 @@ class PrescriptiveDELPHIModel:
         )
         solver.addConstrs(
             exposed[j, k, t + 1] - exposed[j, k, t] >= (
-                    self.infection_rate[j] * self.policy_response[j, t] / self.population[j] * susceptible[j, k, t]
-                    * (1 + exploration_rel_tol) * estimated_infectious[j, t]
+                    self.infection_rate[j] * self.policy_response[j, t] / self.population[j, :].sum()
+                    * susceptible[j, k, t] * (1 + exploration_rel_tol) * estimated_infectious[j, t]
                     - self.progression_rate * exposed[j, k, t]
             ) * self.days_per_timestep
             for j in self._regions for k in self._risk_classes for t in self._non_planning_timesteps
@@ -553,14 +555,25 @@ class PrescriptiveDELPHIModel:
             for j in self._regions for t in self._planning_timesteps
         )
         solver.addConstrs(
-            vaccinated.sum(j, "*", t) <= max_allocation_pct * self.population[j]
+            vaccinated.sum(j, "*", t) <= max_allocation_pct * self.population[j, :].sum()
             for j in self._regions for t in self._planning_timesteps
+        )
+
+        # Set constraints for surplus and unallocated vaccines
+        solver.addConstrs(
+            surplus_vaccines[j, k] >= vaccinated.sum(j, k, "*") - self.population[j, k]
+            for j in self._regions for k in self._risk_classes
+        )
+        solver.addConstrs(
+            unallocated_vaccines[t] >= self.vaccine_budget[t] - vaccinated.sum("*", "*", t)
+            for t in self._planning_timesteps
         )
 
         # Set objective
         solver.setObjective(
             deceased.sum("*", "*", self._n_timesteps) + hospitalized_dying.sum("*", "*", self._n_timesteps)
-            + quarantined_dying.sum("*", "*", self._n_timesteps) + undetected_dying.sum("*", "*", self._n_timesteps),
+            + quarantined_dying.sum("*", "*", self._n_timesteps) + undetected_dying.sum("*", "*", self._n_timesteps)
+            + unallocated_vaccines.sum() + surplus_vaccines.sum(),
             GRB.MINIMIZE
         )
 
@@ -571,6 +584,9 @@ class PrescriptiveDELPHIModel:
             solver.params.FeasibilityTol = feasibility_tol
         if time_limit:
             solver.params.TimeLimit = time_limit
+        if disable_crossover:
+            solver.params.Method = 2
+            solver.params.Crossover = 0
         solver.params.OutputFlag = output_flag
 
         # Solve model
@@ -593,6 +609,7 @@ class PrescriptiveDELPHIModel:
             mip_gap: Optional[float] = None,
             feasibility_tol: Optional[float] = None,
             time_limit: Optional[float] = None,
+            disable_crossover: bool = False,
             output_flag: bool = False,
             n_restarts: int = 10,
             max_iterations: int = 10,
@@ -602,7 +619,7 @@ class PrescriptiveDELPHIModel:
         """
         Solve the prescriptive DELPHI model for vaccine allocation using a coordinate descent heuristic.
         :param exploration_rel_tol: a float in [0, 1] that specifies maximum allowed relative error between the
-            estimated  and actual infectious population in any region (default 0.1)
+            estimated  and actual infectious population in any region (default 0.05)
         :param exploration_abs_tol: a float  that specifies maximum allowed absolute error between the
             estimated and actual infectious population in any region (default 10.0)
         :param termination_tol:
@@ -613,7 +630,9 @@ class PrescriptiveDELPHIModel:
         :param mip_gap: a float that specifies the maximum MIP gap required for termination  (default 1e-2)
         :param feasibility_tol: a float that specifies that maximum feasibility tolerance for constraints (default 1e-2)
         :param time_limit: a float that specifies the maximum solve time in seconds (default 30.0)
-        :param output_flag: a boolean that specifies whether to show the solver logs (default false)
+         :param disable_crossover: a boolean that if true disables Gurobi's crossover algorithm, which used to clean up
+            the interior solution of the barrier method into a basic feasible solution (default False)
+        :param output_flag: a boolean that specifies whether to show the solver logs (default False)
         :param n_restarts: an integer that specifies the number of random restarts (default 10)
         :param max_iterations: an integer that specifies the maximum number of descent iterations per trial (default 10)
         :param seed: an integer that is used to set the numpy seed
@@ -659,6 +678,7 @@ class PrescriptiveDELPHIModel:
                         mip_gap=mip_gap,
                         feasibility_tol=feasibility_tol,
                         time_limit=time_limit,
+                        disable_crossover=disable_crossover,
                         output_flag=output_flag
                     )
                 except GurobiError:
@@ -676,7 +696,7 @@ class PrescriptiveDELPHIModel:
                 # Terminate if solution convergences
                 objective_change = abs(previous_objective - incumbent_objective)
                 estimated_infectious_change = np.abs(previous_solution.infectious.sum(axis=1)
-                                                     - incumbent_solution.infectious.sum(axis=1)).sum()
+                                                     - incumbent_solution.infectious.sum(axis=1)).mean()
                 if max(objective_change, estimated_infectious_change) < termination_tol:
                     trajectory.append(incumbent_objective)
                     if log:
@@ -767,19 +787,19 @@ class PrescriptiveDELPHIModel:
         # Set DELPHI dynamics constraints
         solver.addConstrs(
             susceptible[j, k, t + 1] - susceptible[j, k, t] + vaccinated[j, k, t] >=
-            - self.infection_rate[j] * self.policy_response[j, t] / self.population[j]
+            - self.infection_rate[j] * self.policy_response[j, t] / self.population[j, :].sum()
             * (susceptible[j, k, t] - vaccinated[j, k, t]) * infectious.sum(j, "*", t) * self.days_per_timestep
             for j in self._regions for k in self._risk_classes for t in self._planning_timesteps
         )
         solver.addConstrs(
             susceptible[j, k, t + 1] - susceptible[j, k, t] >=
-            -self.infection_rate[j] * self.policy_response[j, t] / self.population[j]
+            -self.infection_rate[j] * self.policy_response[j, t] / self.population[j, :].sum()
             * susceptible[j, k, t] * infectious.sum(j, "*", t) * self.days_per_timestep
             for j in self._regions for k in self._risk_classes for t in self._non_planning_timesteps
         )
         solver.addConstrs(
             exposed[j, k, t + 1] - exposed[j, k, t] >= (
-                    self.infection_rate[j] * self.policy_response[j, t] / self.population[j]
+                    self.infection_rate[j] * self.policy_response[j, t] / self.population[j, :].sum()
                     * (susceptible[j, k, t] - vaccinated[j, k, t]) * infectious.sum(j, "*", t)
                     - self.progression_rate * exposed[j, k, t]
             ) * self.days_per_timestep
@@ -787,7 +807,7 @@ class PrescriptiveDELPHIModel:
         )
         solver.addConstrs(
             exposed[j, k, t + 1] - exposed[j, k, t] >= (
-                    self.infection_rate[j] * self.policy_response[j, t] / self.population[j]
+                    self.infection_rate[j] * self.policy_response[j, t] / self.population[j, :].sum()
                     * susceptible[j, k, t] * infectious.sum(j, "*", t)
                     - self.progression_rate * exposed[j, k, t]
             ) * self.days_per_timestep
