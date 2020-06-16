@@ -27,6 +27,7 @@ class DiscreteDELPHISolution:
             vaccinated: np.ndarray,
             population: np.ndarray,
             days_per_timestep: float,
+            vaccine_effectiveness: float,
             validate_on_init: bool = False
     ):
         """
@@ -76,6 +77,7 @@ class DiscreteDELPHISolution:
         self.recovered = recovered
         self.vaccinated = vaccinated
         self.population = population
+        self.vaccine_effectiveness = vaccine_effectiveness
         self.days_per_timestep = days_per_timestep
 
         # Check solution
@@ -126,7 +128,7 @@ class DiscreteDELPHISolution:
         )
         ax[0].plot(
             days,
-            (np.minimum(self.vaccinated, self.susceptible).sum(axis=(0, 1)).cumsum()
+            (np.minimum(self.vaccinated * self.vaccine_effectiveness, self.susceptible).sum(axis=(0, 1)).cumsum()
              + self.recovered.sum(axis=(0, 1))) / self.population.sum() * 100,
             label="Vaccinated or recovered", color="tab:green", **plot_settings
         )
@@ -186,6 +188,7 @@ class PrescriptiveDELPHIModel:
         # Set model parameters
         self.infection_rate = params["infection_rate"]
         self.policy_response = params["policy_response"]
+        self.vaccine_effectiveness = params["vaccine_effectiveness"]
         self.progression_rate = params["progression_rate"]
         self.detection_rate = params["detection_rate"]
         self.ihd_transition_rate = params["ihd_transition_rate"]
@@ -295,13 +298,13 @@ class PrescriptiveDELPHIModel:
 
             # Apply Euler forward difference scheme with clipping of negative values
             for j in self._regions:
-                susceptible[j, :, t + 1] = susceptible[j, :, t] - vaccinated[j, :, t] - (
+                susceptible[j, :, t + 1] = susceptible[j, :, t] - self.vaccine_effectiveness * vaccinated[j, :, t] - (
                         self.infection_rate[j] * self.policy_response[j, t] / self.population[j, :].sum()
-                        * (susceptible[j, :, t] - vaccinated[j, :, t]) * infectious[j, :, t].sum()
+                        * (susceptible[j, :, t] - self.vaccine_effectiveness * vaccinated[j, :, t]) * infectious[j, :, t].sum()
                 ) * self.days_per_timestep
                 exposed[j, :, t + 1] = exposed[j, :, t] + (
                         self.infection_rate[j] * self.policy_response[j, t] / self.population[j, :].sum()
-                        * (susceptible[j, :, t] - vaccinated[j, :, t]) * infectious[j, :, t].sum()
+                        * (susceptible[j, :, t] - self.vaccine_effectiveness * vaccinated[j, :, t]) * infectious[j, :, t].sum()
                         - self.progression_rate * exposed[j, :, t]
                 ) * self.days_per_timestep
             susceptible[:, :, t + 1] = np.maximum(susceptible[:, :, t + 1], 0)
@@ -372,7 +375,8 @@ class PrescriptiveDELPHIModel:
             deceased=deceased,
             vaccinated=vaccinated,
             population=self.population,
-            days_per_timestep=self.days_per_timestep
+            days_per_timestep=self.days_per_timestep,
+            vaccine_effectiveness=self.vaccine_effectiveness
         )
 
     def _optimize_relaxation(
@@ -463,9 +467,9 @@ class PrescriptiveDELPHIModel:
 
         # Set DELPHI dynamics constraints
         solver.addConstrs(
-            susceptible[j, k, t + 1] - susceptible[j, k, t] + vaccinated[j, k, t] >=
+            susceptible[j, k, t + 1] - susceptible[j, k, t] + self.vaccine_effectiveness * vaccinated[j, k, t] >=
             - self.infection_rate[j] * self.policy_response[j, t] / self.population[j, :].sum()
-            * (susceptible[j, k, t] - vaccinated[j, k, t])
+            * (susceptible[j, k, t] - self.vaccine_effectiveness * vaccinated[j, k, t])
             * (1 - exploration_rel_tol) * estimated_infectious[j, t] * self.days_per_timestep
             for j in self._regions for k in self._risk_classes for t in self._planning_timesteps
         )
@@ -478,7 +482,7 @@ class PrescriptiveDELPHIModel:
         solver.addConstrs(
             exposed[j, k, t + 1] - exposed[j, k, t] >= (
                     self.infection_rate[j] * self.policy_response[j, t] / self.population[j, :].sum()
-                    * (susceptible[j, k, t] - vaccinated[j, k, t])
+                    * (susceptible[j, k, t] - self.vaccine_effectiveness * vaccinated[j, k, t])
                     * (1 + exploration_rel_tol) * estimated_infectious[j, t]
                     - self.progression_rate * exposed[j, k, t]
             ) * self.days_per_timestep
@@ -557,6 +561,11 @@ class PrescriptiveDELPHIModel:
         solver.addConstrs(
             vaccinated.sum(j, "*", t) <= max_allocation_pct * self.population[j, :].sum()
             for j in self._regions for t in self._planning_timesteps
+        )
+        solver.addConstrs(
+            vaccinated[j, k, t] <= susceptible[j, k, t] - (1-self.vaccine_effectiveness)
+            * sum(vaccinated[j, k, l] for l in self._planning_timesteps if l < t)
+            for j in self._regions for k in self._risk_classes for t in self._planning_timesteps
         )
 
         # Set constraints for surplus and unallocated vaccines
@@ -786,9 +795,10 @@ class PrescriptiveDELPHIModel:
 
         # Set DELPHI dynamics constraints
         solver.addConstrs(
-            susceptible[j, k, t + 1] - susceptible[j, k, t] + vaccinated[j, k, t] >=
+            susceptible[j, k, t + 1] - susceptible[j, k, t] + self.vaccine_effectiveness * vaccinated[j, k, t] >=
             - self.infection_rate[j] * self.policy_response[j, t] / self.population[j, :].sum()
-            * (susceptible[j, k, t] - vaccinated[j, k, t]) * infectious.sum(j, "*", t) * self.days_per_timestep
+            * (susceptible[j, k, t] - self.vaccine_effectiveness * vaccinated[j, k, t]) * infectious.sum(j, "*", t)
+            * self.days_per_timestep
             for j in self._regions for k in self._risk_classes for t in self._planning_timesteps
         )
         solver.addConstrs(
@@ -800,7 +810,7 @@ class PrescriptiveDELPHIModel:
         solver.addConstrs(
             exposed[j, k, t + 1] - exposed[j, k, t] >= (
                     self.infection_rate[j] * self.policy_response[j, t] / self.population[j, :].sum()
-                    * (susceptible[j, k, t] - vaccinated[j, k, t]) * infectious.sum(j, "*", t)
+                    * (susceptible[j, k, t] - self.vaccine_effectiveness * vaccinated[j, k, t]) * infectious.sum(j, "*", t)
                     - self.progression_rate * exposed[j, k, t]
             ) * self.days_per_timestep
             for j in self._regions for k in self._risk_classes for t in self._planning_timesteps
@@ -895,72 +905,3 @@ class PrescriptiveDELPHIModel:
             best_objective = None
 
         return best_objective, best_bound
-
-        # # Check feasibility of warm start
-        # expected_dims = (self._n_regions, self._n_risk_classes, self._n_timesteps + 1)
-        # if check_warm_start_feasibility:
-        #     assert warm_start is not None, f"Invalid argument type for initial_vaccinated - " \
-        #                                f"got {type(warm_start)}, expected{type(np.array([]))}"
-        #
-        #     assert warm_start.shape == expected_dims, \
-        #         f"Invalid dimensions for initial_vaccinated - expected {expected_dims}, " \
-        #         f"received {warm_start.shape}"
-        #     assert np.all(warm_start >= 0), f"Invalid initial_vaccinated - all values must be non-negative"
-        #
-        #     # Set the UB and LB to the initial variable
-        #     solver.setAttr(GRB.Attr.LB, vaccinated, warm_start)
-        #     solver.setAttr(GRB.Attr.UB, vaccinated, warm_start)
-        #     solver.update()
-        #     solver.optimize()
-        #
-        #     if solver.status == GRB.Status.INFEASIBLE:
-        #         if log:
-        #             print(f"Model is infeasible")
-        #
-        #         solver.computeIIS()
-        #         solver.write("model.ilp")
-        #         constraint_inf = solver.IISCONSTR
-        #         if log:
-        #             logger.info(f"Found {sum(constraint_inf)} out of {len(constraint_inf)} violated constraints")
-        #             logger.info(f"Solving model {solver.getAttr('ModelName')}, without user-provided warm start")
-        #         solver.setAttr(GRB.Attr.LB, vaccinated, 0)
-        #         solver.setAttr(GRB.Attr.UB, vaccinated, GRB.INFINITY)
-        #         solver.update()
-        #         solver.optimize()
-        #         best_bound = solver.ObjBound
-        #         try:
-        #             best_objective = solver.ObjVal
-        #             vaccines = self._get_variable_value(solver=solver, variable=vaccinated)
-        #         except GurobiError:
-        #             best_objective = None
-        #             vaccines = None
-        #
-        #         return vaccines, best_objective, best_bound
-        #
-        #     elif solver.status == GRB.Status.OPTIMAL:
-        #         if log:
-        #             logger.info(f"Warm start is feasible \t Incumbent objective value: {solver.objVal}")
-        #             logger.info(f"Solving model {solver.getAttr('ModelName')}, using provided warm start")
-        #
-        #         solver.setAttr(GRB.Attr.LB, vaccinated, 0)
-        #         solver.setAttr(GRB.Attr.UB, vaccinated, GRB.INFINITY)
-        #
-        #
-        #         solver.update()
-        #         solver.optimize()
-        #         vaccines = self._get_variable_value(solver=solver, variable=vaccinated)
-        #         best_objective, best_bound = solver.ObjVal, solver.ObjBound
-        #
-        #         return vaccines, best_objective, best_bound
-        #
-        # # Solve model
-        # solver.optimize()
-        #
-        # # Return vaccine allocation
-        # best_bound = solver.ObjBound()
-        # try:
-        #     best_objective = solver.ObjVal()
-        # except GurobiError:
-        #     best_objective = None
-        #
-        # return best_objective, best_bound
