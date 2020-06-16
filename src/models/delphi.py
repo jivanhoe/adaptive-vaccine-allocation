@@ -100,7 +100,8 @@ class DiscreteDELPHISolution:
         return self.deceased[:, :, -1].sum()
 
     def get_objective(self) -> float:
-        return (self.deceased + self.hospitalized_dying + self.quarantined_dying + self.undetected_dying)[:, :, -2].sum()
+        return (self.deceased + self.hospitalized_dying + self.quarantined_dying + self.undetected_dying)[:, :,
+               -2].sum()
 
     def get_total_infections(self) -> float:
         infectious = self.infectious.sum(axis=(0, 1))
@@ -137,7 +138,8 @@ class DiscreteDELPHISolution:
             label="Exposed or infectious", color="tab:red", **plot_settings
         )
         ax[0].plot(
-            days, (self.hospitalized + self.quarantined + self.undetected).sum(axis=(0, 1)) / self.population.sum() * 100,
+            days,
+            (self.hospitalized + self.quarantined + self.undetected).sum(axis=(0, 1)) / self.population.sum() * 100,
             label="Hospitalized, quarantined or undetected", color="tab:orange", **plot_settings
         )
         ax[0].axhline(0, color="black", alpha=0.5, linestyle="--")
@@ -276,37 +278,41 @@ class PrescriptiveDELPHIModel:
             total_susceptible = susceptible[:, :, t].sum()
             if total_susceptible > 0 and allocate_vaccines:
 
+                susceptible_not_vaccinated = susceptible[:, :, t] - (1 - self.vaccine_effectiveness) *\
+                                             sum(vaccinated[:, :, l] for l in range(t))
+
                 # If random allocation specified, generate feasible allocation
                 if randomize_allocation:
-                    min_vaccinated = min_allocation_pct * susceptible[:, :, t]
+                    min_vaccinated = min_allocation_pct * susceptible_not_vaccinated
                     additional_budget = self.vaccine_budget[t] - min_vaccinated.sum()
                     additional_proportion = np.random.exponential(size=(self._n_regions, self._n_risk_classes)) ** 2
                     additional_proportion = additional_proportion / additional_proportion.sum()
                     additional_proportion = np.maximum(additional_proportion, max_allocation_pct)
                     additional_proportion = additional_proportion / additional_proportion.sum()
                     vaccinated[:, :, t] = np.minimum(
-                        min_vaccinated + additional_proportion * additional_budget,
-                        susceptible[:, :, t]
+                        min_vaccinated + additional_proportion * additional_budget, susceptible_not_vaccinated
                     )
 
                 # Else use baseline policy that orders region-wise allocation by risk class
                 else:
+                    # Since the vaccine effectiveness is constant across regions, the regional_budget should not change
+                    # whether we use the standard susceptible or the susceptible_never_vaccinated /total_never_vax...
                     regional_budget = susceptible[:, :, t].sum(axis=1) / total_susceptible * self.vaccine_budget[t]
                     for k in np.argsort(-self.ihd_transition_rate):
-                        vaccinated[:, k, t] = np.minimum(regional_budget,
-                                                         susceptible[:, k, t] - (1-self.vaccine_effectiveness) *
-                                                         sum(vaccinated[:, k, l] for l in range(t)))
+                        vaccinated[:, k, t] = np.minimum(regional_budget, susceptible_not_vaccinated[:, k])
                         regional_budget -= vaccinated[:, k, t]
 
             # Apply Euler forward difference scheme with clipping of negative values
             for j in self._regions:
                 susceptible[j, :, t + 1] = susceptible[j, :, t] - self.vaccine_effectiveness * vaccinated[j, :, t] - (
                         self.infection_rate[j] * self.policy_response[j, t] / self.population[j, :].sum()
-                        * (susceptible[j, :, t] - self.vaccine_effectiveness * vaccinated[j, :, t]) * infectious[j, :, t].sum()
+                        * (susceptible[j, :, t] - self.vaccine_effectiveness * vaccinated[j, :, t]) * infectious[j, :,
+                                                                                                      t].sum()
                 ) * self.days_per_timestep
                 exposed[j, :, t + 1] = exposed[j, :, t] + (
                         self.infection_rate[j] * self.policy_response[j, t] / self.population[j, :].sum()
-                        * (susceptible[j, :, t] - self.vaccine_effectiveness * vaccinated[j, :, t]) * infectious[j, :, t].sum()
+                        * (susceptible[j, :, t] - self.vaccine_effectiveness * vaccinated[j, :, t]) * infectious[j, :,
+                                                                                                      t].sum()
                         - self.progression_rate * exposed[j, :, t]
                 ) * self.days_per_timestep
             susceptible[:, :, t + 1] = np.maximum(susceptible[:, :, t + 1], 0)
@@ -565,7 +571,7 @@ class PrescriptiveDELPHIModel:
             for j in self._regions for t in self._planning_timesteps
         )
         solver.addConstrs(
-            vaccinated[j, k, t] <= susceptible[j, k, t] - (1-self.vaccine_effectiveness)
+            vaccinated[j, k, t] <= susceptible[j, k, t] - (1 - self.vaccine_effectiveness)
             * gp.quicksum(vaccinated[j, k, l] for l in self._planning_timesteps if l < t)
             for j in self._regions for k in self._risk_classes for t in self._planning_timesteps
         )
@@ -812,7 +818,8 @@ class PrescriptiveDELPHIModel:
         solver.addConstrs(
             exposed[j, k, t + 1] - exposed[j, k, t] >= (
                     self.infection_rate[j] * self.policy_response[j, t] / self.population[j, :].sum()
-                    * (susceptible[j, k, t] - self.vaccine_effectiveness * vaccinated[j, k, t]) * infectious.sum(j, "*", t)
+                    * (susceptible[j, k, t] - self.vaccine_effectiveness * vaccinated[j, k, t]) * infectious.sum(j, "*",
+                                                                                                                 t)
                     - self.progression_rate * exposed[j, k, t]
             ) * self.days_per_timestep
             for j in self._regions for k in self._risk_classes for t in self._planning_timesteps
