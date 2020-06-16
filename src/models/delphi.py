@@ -293,7 +293,9 @@ class PrescriptiveDELPHIModel:
                 else:
                     regional_budget = susceptible[:, :, t].sum(axis=1) / total_susceptible * self.vaccine_budget[t]
                     for k in np.argsort(-self.ihd_transition_rate):
-                        vaccinated[:, k, t] = np.minimum(regional_budget, susceptible[:, k, t])
+                        vaccinated[:, k, t] = np.minimum(regional_budget,
+                                                         susceptible[:, k, t] - (1-self.vaccine_effectiveness) *
+                                                         sum(vaccinated[:, k, l] for l in range(t)))
                         regional_budget -= vaccinated[:, k, t]
 
             # Apply Euler forward difference scheme with clipping of negative values
@@ -564,7 +566,7 @@ class PrescriptiveDELPHIModel:
         )
         solver.addConstrs(
             vaccinated[j, k, t] <= susceptible[j, k, t] - (1-self.vaccine_effectiveness)
-            * sum(vaccinated[j, k, l] for l in self._planning_timesteps if l < t)
+            * gp.quicksum(vaccinated[j, k, l] for l in self._planning_timesteps if l < t)
             for j in self._regions for k in self._risk_classes for t in self._planning_timesteps
         )
 
