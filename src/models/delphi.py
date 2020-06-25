@@ -23,8 +23,9 @@ class DiscreteDELPHISolution:
             recovered: np.ndarray,
             vaccinated: np.ndarray,
             population: np.ndarray,
-            days_per_timestep: float,
-            vaccine_effectiveness: float,
+            capacity: Optional[np.ndarray] = None,
+            days_per_timestep: float = 1.0,
+            vaccine_effectiveness: float = 1.0,
             validate_on_init: bool = False
     ):
         """
@@ -74,6 +75,7 @@ class DiscreteDELPHISolution:
         self.recovered = recovered
         self.vaccinated = vaccinated
         self.population = population
+        self.capacity = capacity
         self.vaccine_effectiveness = vaccine_effectiveness
         self.days_per_timestep = days_per_timestep
 
@@ -88,7 +90,7 @@ class DiscreteDELPHISolution:
         """
         expected_dims = self.susceptible.shape
         for attr, value in self.__dict__.items():
-            if attr != "days_per_timestep" and value:
+            if attr not in ["days_per_timestep", "vaccine_effectiveness", "population", "capacity"] and value:
                 assert value.shape == expected_dims, \
                     f"Invalid dimensions for {attr} array - expected {expected_dims}, received {value.shape}"
                 assert np.all(value >= 0), f"Invalid {attr} array - all values must be non-negative"
@@ -172,14 +174,17 @@ class PrescriptiveDELPHIModel:
     def simulate(
             self,
             vaccinated: Optional[np.ndarray] = None,
-            randomize_allocation: bool = False
+            randomize_allocation: bool = False,
+            prioritization_allocation: bool = False
     ) -> DiscreteDELPHISolution:
         """
         Solve DELPHI system using a forward difference scheme.
         :param vaccinated: a numpy array of (n_regions, n_classes, n_timesteps + 1) that represents a feasible
             allocation of vaccines by region and risk class at each timestep
-        :param randomize_allocation: a bool that specifies whether to randomize the allocation policy if none provided
-            (default False)
+        :param randomize_allocation: a boolean that specifies whether to randomize the allocation policy if none
+            provided (default False)
+        :param prioritization_allocation: a boolean that specifies whether to prioritize allocation to high risk
+            individuals within each region if no allocation policy is provided (default False)
         :return: a DiscreteDELPHISolution object
         """
 
@@ -241,12 +246,18 @@ class PrescriptiveDELPHIModel:
 
                 # Else use baseline policy that orders region-wise allocation by risk class
                 else:
-                    regional_budget = eligible.sum(axis=1) / total_eligible * self.vaccine_budget[t]
-                    for k in np.argsort(-self.ihd_transition_rate):
-                        if k in self._included_risk_classes:
-                            vaccinated[:, k, t] = np.minimum(
-                                regional_budget, eligible[:, self._included_risk_classes == k][0])
-                            regional_budget -= vaccinated[:, k, t]
+                    if prioritization_allocation:
+                        regional_budget = eligible.sum(axis=1) / total_eligible * self.vaccine_budget[t]
+                        for k in np.argsort(-self.ihd_transition_rate):
+                            if k in self._included_risk_classes:
+                                vaccinated[:, k, t] = np.minimum(
+                                    regional_budget, eligible[:, self._included_risk_classes == k][0])
+                                regional_budget -= vaccinated[:, k, t]
+                    else:
+                        regional_budget = self.population.sum(axis=1) / self.population.sum()
+                        for k in self._included_risk_classes:
+                            vaccinated[:, k, t] = regional_budget * self.population[:, k] / \
+                                                  self.population[:, self._included_risk_classes].sum()
 
             # Apply Euler forward difference scheme with clipping of negative values
             for j in self._regions:
@@ -630,12 +641,12 @@ class PrescriptiveDELPHIModel:
 
             # Initialize a feasible solution
             trajectory = []
-            incumbent_solution = self.simulate(randomize_allocation=False)
+            incumbent_solution = self.simulate(randomize_allocation=True)
             incumbent_objective = incumbent_solution.get_objective()
 
             if log:
                 print(f"Restart: {restart + 1}/{n_restarts}")
-                print(f"Iteration: 0/{max_iterations} \t Objective value: {incumbent_objective}")
+                print(f"Iteration: 0/{max_iterations} \t Objective value: {'{0:.2f}'.format(incumbent_objective)}")
 
             for i in range(max_iterations):
 
@@ -662,9 +673,9 @@ class PrescriptiveDELPHIModel:
                 # Update incumbent solution
                 previous_solution, incumbent_solution = incumbent_solution, self.simulate(vaccinated=vaccinated)
                 previous_objective, incumbent_objective = incumbent_objective, incumbent_solution.get_objective()
-
+                incumbent_solution.capacity = capacity
                 if log:
-                    print(f"Iteration: {i + 1}/{max_iterations} \t Objective value: {incumbent_objective}")
+                    print(f"Iteration: {i + 1}/{max_iterations} \t Objective value: {'{0:.2f}'.format(incumbent_objective)}")
 
                 # Terminate if solution convergences
                 objective_change = abs(previous_objective - incumbent_objective)

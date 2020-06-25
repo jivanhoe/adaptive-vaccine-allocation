@@ -44,13 +44,13 @@ def get_initial_conditions(
                 & (pop_df["min_age"] >= risk_class["min_age"])
                 & (pop_df["max_age"] <= risk_class["max_age"])
                 & (pop_df["state"] == state)
-            ]["population"].sum() / 1e3  # convert population units of thousands
+            ]["population"].sum() / 1e2  # convert population units of hundreds
 
         # Calculate initial exposed and infectious population for state
         initial_exposed[j, :] = population[j, :] / population[j, :].sum() / detection_prob \
-            * param_df.loc[state, "pct_exposed"] * param_df.loc[state, "initial_active_cases"] / 1e3
+            * param_df.loc[state, "pct_exposed"] * param_df.loc[state, "initial_active_cases"] / 1e2
         initial_infectious[j, :] = population[j, :] / population[j, :].sum() / detection_prob \
-            * param_df.loc[state, "pct_infectious"] * param_df.loc[state, "initial_active_cases"] / 1e3
+            * param_df.loc[state, "pct_infectious"] * param_df.loc[state, "initial_active_cases"] / 1e2
 
     # Return dictionary with all initial conditions
     return dict(
