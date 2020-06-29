@@ -151,10 +151,12 @@ def get_delphi_params(
 def get_vaccine_params(
         n_timesteps: int,
         total_pop: float,
-        vaccine_budget_pct: float,
         vaccine_effectiveness: float,
+        vaccine_budget_pct: float,
         max_allocation_pct: float,
         min_allocation_pct: float,
+        max_decrease_pct: float,
+        max_increase_pct: float,
         max_total_capacity_pct: Optional[float] = None,
         optimize_capacity: bool = False,
         excluded_risk_classes: Optional[List[int]] = None,
@@ -164,23 +166,27 @@ def get_vaccine_params(
 
     :param n_timesteps:
     :param total_pop:
-    :param vaccine_budget_pct:
     :param vaccine_effectiveness: positive float value in [0, 1] that specifies the probability a vaccinated individual
         will become immune (default 0.5)
+    :param vaccine_budget_pct:
+    :param max_total_capacity_pct:
     :param max_allocation_pct:
     :param min_allocation_pct:
-    :param max_total_capacity_pct:
+    :param max_decrease_pct:
+    :param max_increase_pct:
     :param optimize_capacity:
     :param excluded_risk_classes:
     :param planning_period:
     :return:
     """
     return dict(
-        vaccine_budget=np.array([total_pop * vaccine_budget_pct for t in range(n_timesteps) if not t % planning_period]),
         vaccine_effectiveness=vaccine_effectiveness,
+        vaccine_budget=np.array([total_pop * vaccine_budget_pct for t in range(n_timesteps) if not t % planning_period]),
+        max_total_capacity=(max_total_capacity_pct if max_total_capacity_pct else vaccine_budget_pct) * total_pop,
         max_allocation_pct=max_allocation_pct,
         min_allocation_pct=min_allocation_pct,
-        max_total_capacity=(max_total_capacity_pct if max_total_capacity_pct else vaccine_budget_pct) * total_pop,
+        max_decrease_pct=max_decrease_pct,
+        max_increase_pct=max_increase_pct,
         optimize_capacity=optimize_capacity,
         excluded_risk_classes=np.array(excluded_risk_classes) if excluded_risk_classes else np.array([]).astype(int),
     )

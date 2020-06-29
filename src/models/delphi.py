@@ -151,12 +151,15 @@ class PrescriptiveDELPHIModel:
         self.days_per_timestep = delphi_params["days_per_timestep"]
 
         # Set vaccine parameters
+        self.vaccine_effectiveness = vaccine_params["vaccine_effectiveness"]
         self.vaccine_budget = vaccine_params["vaccine_budget"]
+        self.max_total_capacity = vaccine_params["max_total_capacity"]
         self.max_allocation_pct = vaccine_params["max_allocation_pct"]
         self.min_allocation_pct = vaccine_params["min_allocation_pct"]
-        self.max_total_capacity = vaccine_params["max_total_capacity"]
+        self.max_decrease_pct = vaccine_params["max_decrease_pct"]
+        self.max_increase_pct = vaccine_params["max_increase_pct"]
         self.optimize_capacity = vaccine_params["optimize_capacity"]
-        self.vaccine_effectiveness = vaccine_params["vaccine_effectiveness"]
+
         self.excluded_risk_classes = vaccine_params["excluded_risk_classes"]
 
         # Initialize helper attributes
@@ -234,7 +237,7 @@ class PrescriptiveDELPHIModel:
                 if randomize_allocation:
                     min_vaccinated = self.min_allocation_pct * eligible
                     additional_budget = self.vaccine_budget[t] - min_vaccinated.sum()
-                    additional_proportion = np.random.exponential(size=(self._n_regions, self._n_included_risk_classes)) ** 2
+                    additional_proportion = np.random.exponential(size=(self._n_regions, self._n_included_risk_classes))
                     additional_proportion = additional_proportion / additional_proportion.sum()
                     vaccinated[:, self._included_risk_classes, t] = np.minimum(
                         eligible,
@@ -386,6 +389,7 @@ class PrescriptiveDELPHIModel:
         undetected_dying = solver.addVars(self._n_regions, self._n_risk_classes, self._n_timesteps + 1, lb=0)
         deceased = solver.addVars(self._n_regions, self._n_risk_classes, self._n_timesteps + 1, lb=0)
         vaccinated = solver.addVars(self._n_regions, self._n_risk_classes, self._n_timesteps + 1, lb=0)
+        eligible = solver.addVars(self._n_regions, self._n_risk_classes, self._n_timesteps + 1, lb=0)
         infectious_error = solver.addVars(self._n_regions, self._n_timesteps, lb=0)
         surplus_vaccines = solver.addVars(self._n_regions, self._n_risk_classes, lb=0)
         unallocated_vaccines = solver.addVars(self._n_timesteps, lb=0)
@@ -504,12 +508,16 @@ class PrescriptiveDELPHIModel:
 
         # Set resource constraints
         solver.addConstrs(
+            eligible[j, k, t] == susceptible[j, k, t] - (1 - self.vaccine_effectiveness)
+            * gp.quicksum(vaccinated[j, k, u] for u in self._planning_timesteps if u < t)
+            for j in self._regions for k in self._included_risk_classes for t in self._planning_timesteps
+        )
+        solver.addConstrs(
             vaccinated.sum("*", "*", t) <= self.vaccine_budget[t]
             for t in self._planning_timesteps
         )
         solver.addConstrs(
-            vaccinated[j, k, t] <= susceptible[j, k, t] - (1 - self.vaccine_effectiveness)
-            * gp.quicksum(vaccinated[j, k, u] for u in self._planning_timesteps if u < t)
+            vaccinated[j, k, t] <= eligible[j, k, t]
             for j in self._regions for k in self._included_risk_classes for t in self._planning_timesteps
         )
         solver.addConstrs(
@@ -519,6 +527,18 @@ class PrescriptiveDELPHIModel:
         solver.addConstrs(
             vaccinated[j, k, t] == 0
             for j in self._regions for k in self.excluded_risk_classes for t in self._timesteps
+        )
+        solver.addConstrs(
+            vaccinated.sum(j, "*", t) >= self.min_allocation_pct * eligible.sum(j, "*", t)
+            for j in self._regions for t in self._planning_timesteps
+        )
+        solver.addConstrs(
+            vaccinated.sum(j, "*", u) >= (1 - self.max_decrease_pct) * vaccinated.sum(j, "*", t)
+            for j in self._regions for t, u in zip(self._planning_timesteps[:-1], self._planning_timesteps[1:])
+        )
+        solver.addConstrs(
+            vaccinated.sum(j, "*", u) <= (1 + self.max_increase_pct) * vaccinated.sum(j, "*", t)
+            for j in self._regions for t, u in zip(self._planning_timesteps[:-1], self._planning_timesteps[1:])
         )
         if self.optimize_capacity:
             solver.addConstrs(
@@ -537,13 +557,6 @@ class PrescriptiveDELPHIModel:
                 capacity.sum() <= self.max_total_capacity
             )
         else:
-            solver.addConstrs(
-                vaccinated.sum(j, "*", t) >= self.min_allocation_pct * (
-                    susceptible.sum(j, "*", t) - (1 - self.vaccine_effectiveness)
-                    * gp.quicksum(vaccinated.sum(j, "*", u) for u in self._planning_timesteps if u < t)
-                )
-                for j in self._regions for t in self._planning_timesteps
-            )
             solver.addConstrs(
                 vaccinated.sum(j, "*", t) <= self.max_allocation_pct * self.population[j, :].sum()
                 for j in self._regions for t in self._planning_timesteps
@@ -641,7 +654,7 @@ class PrescriptiveDELPHIModel:
 
             # Initialize a feasible solution
             trajectory = []
-            incumbent_solution = self.simulate(randomize_allocation=True)
+            incumbent_solution = self.simulate(randomize_allocation=False, prioritization_allocation=True)
             incumbent_objective = incumbent_solution.get_objective()
 
             if log:
