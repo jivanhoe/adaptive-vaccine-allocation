@@ -1,10 +1,10 @@
 import matplotlib.pyplot as plt
 import numpy as np
 from typing import Tuple
-from models.delphi import DiscreteDELPHISolution
+from models.prescriptive_delphi_model import DELPHISolution
 
 
-def plot_solution(solution: DiscreteDELPHISolution, figsize: Tuple[float, float] = (15.0, 7.5)) -> plt.figure:
+def plot_solution(solution: DELPHISolution, figsize: Tuple[float, float] = (15.0, 7.5)) -> plt.figure:
     """
     Plot a visualization of the solution showing the change in population composition over time and the cumulative
     casualties.

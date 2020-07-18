@@ -1,4 +1,4 @@
-from typing import Tuple, Union, Optional, NoReturn, List, Dict
+from typing import Tuple, Union, Optional, Dict
 
 import gurobipy as gp
 import numpy as np
@@ -6,7 +6,7 @@ from gurobipy import GRB
 from gurobipy import GurobiError
 
 
-class DiscreteDELPHISolution:
+class DELPHISolution:
 
     def __init__(
             self,
@@ -22,40 +22,40 @@ class DiscreteDELPHISolution:
             deceased: np.ndarray,
             recovered: np.ndarray,
             vaccinated: np.ndarray,
-            population: np.ndarray,
             capacity: Optional[np.ndarray] = None,
-            days_per_timestep: float = 1.0,
-            vaccine_effectiveness: float = 1.0,
-            validate_on_init: bool = False
+            days_per_timestep: float = 1.0
     ):
         """
-        Instantiate a container object for a DELPHI solution
-        :param susceptible: a numpy array of shape (n_regions, k_classes, t_timesteps + 1) that represents the
-            susceptible population by region and risk class at each timestep
-        :param exposed: a numpy array of shape (n_regions, k_classes, t_timesteps + 1) that represents the exposed
-            population by region and risk class at each timestep
-        :param infectious: a numpy array of shape [n_regions, k_classes, t_timesteps + 1) that represents the infectious
-            population by region and risk class at each timestep
-        :param hospitalized_dying: a numpy array of shape (n_regions, k_classes, t_timesteps + 1) that represents the
-            hospitalized dying population by region and risk class at each timestep
-        :param hospitalized_recovering: a numpy array of shape (n_regions, k_classes, t_timesteps + 1) that represents
-            the hospitalized recovering population by region and risk class at each timestep
-        :param quarantined_dying: a numpy array of shape (n_regions, k_classes, t_timesteps+1) that represents the
-            quarantined dying population by region and risk class at each timestep
-        :param quarantined_recovering: a numpy array of shape (n_regions, k_classes, t_timesteps+1) that represents the
-            quarantined recovering population by region and risk class at each timestep
-        :param undetected_dying: a numpy array of shape (n_regions, k_classes, t_timesteps+1) that represents the
-            undetected dying population by region and risk class at each timestep
-        :param undetected_recovering: a numpy array of shape (n_regions, k_classes, t_timesteps+1) that represents the
-            undetected recovering population by region and risk class at each timestep
-        :param recovered: a numpy array of shape (n_regions, k_classes, t_timesteps+1) that represents the recovered
-            population by region and risk class at each timestep
-        :param deceased: a numpy array of shape (n_regions, k_classes, t_timesteps+1) that represents the deceased
-            population by region and risk class at each timestep
-        :param vaccinated: a numpy array of shape (n_regions, k_classes, t_timesteps+1) that represents the number
-            vaccines allocated by region and risk class at each timestep
-        :param population: a numpy array of shape (
-        :param validate_on_init: a boolean that specifies whether to validate the provided solution on initialization
+        Instantiate a container object for a DELPHI solution.
+
+        :param susceptible: a numpy array of shape (n_regions, n_risk_classes, n_timesteps + 1) that represents the
+        susceptible population by region and risk class at each timestep
+        :param exposed: a numpy array of shape (n_regions, n_risk_classes, n_timesteps + 1) that represents the exposed
+        population by region and risk class at each timestep
+        :param infectious: a numpy array of shape (n_regions, n_risk_classes, n_timesteps + 1) that represents the
+        infectious population by region and risk class at each timestep
+        :param hospitalized_dying: a numpy array of shape (n_regions, n_risk_classes, n_timesteps + 1) that represents
+        the hospitalized dying population by region and risk class at each timestep
+        :param hospitalized_recovering: a numpy array of shape (n_regions, n_risk_classes, n_timesteps + 1) that
+        represents the hospitalized recovering population by region and risk class at each timestep
+        :param quarantined_dying: a numpy array of shape (n_regions, n_risk_classes, n_timesteps + 1) that represents
+        the quarantined dying population by region and risk class at each timestep
+        :param quarantined_recovering: a numpy array of shape (n_regions, n_risk_classes, n_timesteps + 1) that
+        represents the quarantined recovering population by region and risk class at each timestep
+        :param undetected_dying: a numpy array of shape (n_regions, n_risk_classes, n_timesteps + 1) that represents the
+        undetected dying population by region and risk class at each timestep
+        :param undetected_recovering: a numpy array of shape (n_regions, n_risk_classes, n_timesteps + 1) that
+        represents the undetected recovering population by region and risk class at each timestep
+        :param recovered: a numpy array of shape (n_regions, n_risk_classes, n_timesteps + 1) that represents the
+        recovered population by region and risk class at each timestep
+        :param deceased: a numpy array of shape (n_regions, n_risk_classes, n_timesteps + 1) that represents the
+         deceased population by region and risk class at each timestep
+        :param vaccinated: a numpy array of shape (n_regions, n_risk_classes, n_timesteps + 1) that represents the
+        number vaccines allocated by region and risk class at each timestep
+        :param capacity: a numpy array of shape (n_regions,) that represents the allocation capacity of each region
+        per timestep
+        :param days_per_timestep: a positive float that specifies the number of days per timestep used in the
+        discretization scheme of the solution
         """
 
         # Initialize functional states
@@ -74,35 +74,16 @@ class DiscreteDELPHISolution:
         self.deceased = deceased
         self.recovered = recovered
         self.vaccinated = vaccinated
-        self.population = population
         self.capacity = capacity
-        self.vaccine_effectiveness = vaccine_effectiveness
         self.days_per_timestep = days_per_timestep
-
-        # Check solution
-        if validate_on_init:
-            self._validate_solution()
-
-    def _validate_solution(self) -> NoReturn:
-        """
-        Check that the provided solution arrays have valid dimensions and values.
-        :return: None
-        """
-        expected_dims = self.susceptible.shape
-        for attr, value in self.__dict__.items():
-            if attr not in ["days_per_timestep", "vaccine_effectiveness", "population", "capacity"] and value:
-                assert value.shape == expected_dims, \
-                    f"Invalid dimensions for {attr} array - expected {expected_dims}, received {value.shape}"
-                assert np.all(value >= 0), f"Invalid {attr} array - all values must be non-negative"
 
     def get_total_deaths(self) -> float:
         return self.deceased[:, :, -1].sum()
 
-    def get_objective(self) -> float:
-        return (self.deceased + self.hospitalized_dying + self.quarantined_dying + self.undetected_dying
-                )[:, :, -2].sum()
+    def get_objective_value(self) -> float:
+        return (self.deceased + self.hospitalized_dying + self.quarantined_dying + self.undetected_dying)[:, :, -2].sum()
 
-    def get_total_infections(self) -> float:
+    def get_total_cases(self) -> float:
         infectious = self.infectious.sum(axis=(0, 1))
         return 0.5 * (infectious[1:] + infectious[:-1]).sum() * self.days_per_timestep
 
@@ -116,9 +97,11 @@ class PrescriptiveDELPHIModel:
             vaccine_params: Dict[str, Union[float, bool, np.ndarray]]
     ):
         """
-        Instantiate a discrete DELPHI model with initial conditions and parameter estimates.
+        Instantiate a prescriptive DELPHI model with initial conditions and parameter estimates.
+
         :param initial_conditions: a dictionary containing initial condition arrays
-        :param delphi_params: a dictionary containing the estimate model parameters
+        :param delphi_params: a dictionary containing the estimated DELPHI model parameters
+        :param vaccine_params: a dictionary containing vaccine-related parameters
         """
 
         # Set initial conditions
@@ -145,8 +128,10 @@ class PrescriptiveDELPHIModel:
         self.iqr_transition_rate = delphi_params["iqr_transition_rate"]
         self.iud_transition_rate = delphi_params["iud_transition_rate"]
         self.iur_transition_rate = delphi_params["iur_transition_rate"]
-        self.death_rate = delphi_params["death_rate"]
-        self.recovery_rate = delphi_params["recovery_rate"]
+        self.hospitalized_death_rate = delphi_params["hospitalized_death_rate"]
+        self.unhospitalized_death_rate = delphi_params["unhospitalized_death_rate"]
+        self.hospitalized_recovery_rate = delphi_params["hospitalized_recovery_rate"]
+        self.unhospitalized_recovery_rate = delphi_params["unhospitalized_recovery_rate"]
         self.mortality_rate = delphi_params["mortality_rate"]
         self.days_per_timestep = delphi_params["days_per_timestep"]
 
@@ -171,24 +156,23 @@ class PrescriptiveDELPHIModel:
         self._risk_classes = np.arange(self._n_risk_classes)
         self._included_risk_classes = np.array([k for k in self._risk_classes if k not in self.excluded_risk_classes])
         self._timesteps = np.arange(self._n_timesteps)
-        self._planning_timesteps = np.array([t for t in self._timesteps if self.vaccine_budget[t] > 0])
-        self._non_planning_timesteps = np.array([t for t in self._timesteps if self.vaccine_budget[t] == 0])
 
     def simulate(
             self,
             vaccinated: Optional[np.ndarray] = None,
             randomize_allocation: bool = False,
             prioritization_allocation: bool = False
-    ) -> DiscreteDELPHISolution:
+    ) -> DELPHISolution:
         """
-        Solve DELPHI system using a forward difference scheme.
+        Solve DELPHI IVP using a forward difference scheme.
+
         :param vaccinated: a numpy array of (n_regions, n_classes, n_timesteps + 1) that represents a feasible
-            allocation of vaccines by region and risk class at each timestep
-        :param randomize_allocation: a boolean that specifies whether to randomize the allocation policy if none
-            provided (default False)
+        allocation of vaccines by region and risk class at each timestep
+        :param randomize_allocation: a boolean that specifies whether to randomly generate a feasible  allocation policy
+        based on an exponential distribution if none provided (default False)
         :param prioritization_allocation: a boolean that specifies whether to prioritize allocation to high risk
-            individuals within each region if no allocation policy is provided (default False)
-        :return: a DiscreteDELPHISolution object
+        individuals within each region if no allocation policy is provided (default False)
+        :return: a DELPHISolution object
         """
 
         # Initialize functional states
@@ -227,10 +211,9 @@ class PrescriptiveDELPHIModel:
 
             # Get eligible population subsets for vaccination
             eligible = susceptible[:, self._included_risk_classes, t] \
-                       - (1 - self.vaccine_effectiveness) * vaccinated[:, self._included_risk_classes, :t].sum()
+                       - (1 - self.vaccine_effectiveness) * vaccinated[:, self._included_risk_classes, :t].sum(axis=2)
             eligible = np.maximum(eligible, 0)
             total_eligible = eligible.sum()
-
             if total_eligible > 0 and allocate_vaccines:
 
                 # If random allocation specified, generate feasible allocation
@@ -254,8 +237,12 @@ class PrescriptiveDELPHIModel:
                         for k in np.argsort(-self.ihd_transition_rate):
                             if k in self._included_risk_classes:
                                 vaccinated[:, k, t] = np.minimum(
-                                    regional_budget, eligible[:, self._included_risk_classes == k][0])
+                                    regional_budget,
+                                    eligible[:, self._included_risk_classes == k][0][0]
+                                )
                                 regional_budget -= vaccinated[:, k, t]
+                                if regional_budget.sum() == 0:
+                                    break
                     else:
                         regional_budget = self.population.sum(axis=1) / self.population.sum()
                         for k in self._included_risk_classes:
@@ -286,50 +273,51 @@ class PrescriptiveDELPHIModel:
 
             hospitalized_dying[:, :, t + 1] = hospitalized_dying[:, :, t] + (
                     self.ihd_transition_rate * infectious[:, :, t]
-                    - self.death_rate * hospitalized_dying[:, :, t]
+                    - self.hospitalized_death_rate * hospitalized_dying[:, :, t]
             ) * self.days_per_timestep
             hospitalized_dying[:, :, t + 1] = np.maximum(hospitalized_dying[:, :, t + 1], 0)
 
             hospitalized_recovering[:, :, t + 1] = hospitalized_recovering[:, :, t] + (
                     self.ihr_transition_rate * infectious[:, :, t]
-                    - self.recovery_rate * hospitalized_recovering[:, :, t]
+                    - self.hospitalized_recovery_rate * hospitalized_recovering[:, :, t]
             ) * self.days_per_timestep
             hospitalized_recovering[:, :, t + 1] = np.maximum(hospitalized_recovering[:, :, t + 1], 0)
 
             quarantined_dying[:, :, t + 1] = quarantined_dying[:, :, t] + (
                     self.iqd_transition_rate * infectious[:, :, t]
-                    - self.death_rate * quarantined_dying[:, :, t]
+                    - self.unhospitalized_death_rate * quarantined_dying[:, :, t]
             ) * self.days_per_timestep
             quarantined_dying[:, :, t + 1] = np.maximum(quarantined_dying[:, :, t + 1], 0)
 
             quarantined_recovering[:, :, t + 1] = quarantined_recovering[:, :, t] + (
                     self.iqr_transition_rate * infectious[:, :, t]
-                    - self.recovery_rate * quarantined_recovering[:, :, t]
+                    - self.unhospitalized_recovery_rate * quarantined_recovering[:, :, t]
             ) * self.days_per_timestep
             quarantined_recovering[:, :, t + 1] = np.maximum(quarantined_recovering[:, :, t + 1], 0)
 
             undetected_dying[:, :, t + 1] = undetected_dying[:, :, t] + (
                     self.iud_transition_rate * infectious[:, :, t]
-                    - self.death_rate * undetected_dying[:, :, t]
+                    - self.unhospitalized_death_rate * undetected_dying[:, :, t]
             ) * self.days_per_timestep
             undetected_dying[:, :, t + 1] = np.maximum(undetected_dying[:, :, t + 1], 0)
 
             undetected_recovering[:, :, t + 1] = undetected_recovering[:, :, t] + (
                     self.iur_transition_rate * infectious[:, :, t]
-                    - self.recovery_rate * undetected_recovering[:, :, t]
+                    - self.unhospitalized_recovery_rate * undetected_recovering[:, :, t]
             ) * self.days_per_timestep
             undetected_recovering[:, :, t + 1] = np.maximum(undetected_recovering[:, :, t + 1], 0)
 
-            deceased[:, :, t + 1] = deceased[:, :, t] + self.death_rate * (
-                    hospitalized_dying[:, :, t] + quarantined_dying[:, :, t] + undetected_dying[:, :, t]
+            deceased[:, :, t + 1] = deceased[:, :, t] + (
+                    self.hospitalized_death_rate * hospitalized_dying[:, :, t]
+                    + self.unhospitalized_death_rate * (quarantined_dying[:, :, t] + undetected_dying[:, :, t])
             ) * self.days_per_timestep
 
-            recovered[:, :, t + 1] = recovered[:, :, t] + self.recovery_rate * (
-                    hospitalized_recovering[:, :, t] + quarantined_recovering[:, :, t]
-                    + undetected_recovering[:, :, t]
+            recovered[:, :, t + 1] = recovered[:, :, t] + (
+                    self.hospitalized_recovery_rate * hospitalized_recovering[:, :, t]
+                    + self.unhospitalized_recovery_rate * (quarantined_recovering[:, :, t] + undetected_recovering[:, :, t])
             ) * self.days_per_timestep
 
-        return DiscreteDELPHISolution(
+        return DELPHISolution(
             susceptible=susceptible,
             exposed=exposed,
             infectious=infectious,
@@ -342,9 +330,7 @@ class PrescriptiveDELPHIModel:
             recovered=recovered,
             deceased=deceased,
             vaccinated=vaccinated,
-            population=self.population,
             days_per_timestep=self.days_per_timestep,
-            vaccine_effectiveness=self.vaccine_effectiveness
         )
 
     def _optimize_relaxation(
@@ -359,221 +345,208 @@ class PrescriptiveDELPHIModel:
             output_flag: bool
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Solve the linear relaxation of the  for the optimal vaccine policy, given a fixed infectious pop
+        Solve a linear relaxation of the vaccine allocation problem, based on estimated infectious populations.
+
         :param estimated_infectious: numpy array of size (n_regions, k_classes, t_timesteps + 1) represents the
-            estimated infectious population by region and risk class at each timestep, based on a previous feasible
-            solution
+        estimated infectious population by region and risk class at each timestep, based on a previous feasible
+        solution
         :param exploration_rel_tol: a float in [0, 1] that specifies maximum allowed relative error between the
-            estimated  and actual infectious population in any region
+        estimated  and actual infectious population in any region
         :param exploration_abs_tol: a positive float that specifies maximum allowed absolute error between the
-            estimated and actual infectious population in any region
-        :param mip_gap: a float that specifies the maximum MIP gap required for termination
-        :param feasibility_tol: a float that specifies that maximum feasibility tolerance for constraints
-        :param output_flag: a boolean that specifies whether to show the solver logs
-        :param disable_crossover: a boolean that if true disables Gurobi's crossover algorithm, which used to clean up
-            the interior solution of the barrier method into a basic feasible solution
-        :param time_limit: a float that specifies the maximum solve time in seconds
-        :return: a numpy array of size (n_regions, k_classes, t_timesteps + 1) that represents the updated vaccine
-            allocations
+        estimated and actual infectious population in any region
+        :param mip_gap: an optional float that if set overrides Gurobi's default maximum MIP gap required for
+        termination (default None)
+        :param feasibility_tol: an optional float that if set overrides Gurobi's default maximum feasibility tolerance
+        for constraints (default None)
+        :param time_limit: an optional float that if set specifies the maximum solve time in seconds (default None)
+        :param disable_crossover: a  boolean that if true disables Gurobi's crossover algorithm, which used to clean up
+        the interior solution of the barrier method into a basic feasible solution (default False)
+        :param output_flag: a boolean that specifies whether to show the solver logs (default False)
+        :return: a tuple of two numpy arrays of size (n_regions, n_risk_classes, t_timesteps + 1) and (n_regions,) that
+        respectively represent the vaccine allocation policy and the regional allocation capacities
+        allocations
         """
 
         # Initialize model
-        solver = gp.Model("DELPHI")
+        model = gp.Model()
 
         # Define decision variables
-        susceptible = solver.addVars(self._n_regions, self._n_risk_classes, self._n_timesteps + 1, lb=0)
-        exposed = solver.addVars(self._n_regions, self._n_risk_classes, self._n_timesteps + 1, lb=0)
-        infectious = solver.addVars(self._n_regions, self._n_risk_classes, self._n_timesteps + 1, lb=0)
-        hospitalized_dying = solver.addVars(self._n_regions, self._n_risk_classes, self._n_timesteps + 1, lb=0)
-        quarantined_dying = solver.addVars(self._n_regions, self._n_risk_classes, self._n_timesteps + 1, lb=0)
-        undetected_dying = solver.addVars(self._n_regions, self._n_risk_classes, self._n_timesteps + 1, lb=0)
-        deceased = solver.addVars(self._n_regions, self._n_risk_classes, self._n_timesteps + 1, lb=0)
-        vaccinated = solver.addVars(self._n_regions, self._n_risk_classes, self._n_timesteps + 1, lb=0)
-        eligible = solver.addVars(self._n_regions, self._n_risk_classes, self._n_timesteps + 1, lb=0)
-        infectious_error = solver.addVars(self._n_regions, self._n_timesteps, lb=0)
-        surplus_vaccines = solver.addVars(self._n_regions, self._n_risk_classes, lb=0)
-        unallocated_vaccines = solver.addVars(self._n_timesteps, lb=0)
+        susceptible = model.addVars(self._n_regions, self._n_risk_classes, self._n_timesteps + 1, lb=0)
+        exposed = model.addVars(self._n_regions, self._n_risk_classes, self._n_timesteps + 1, lb=0)
+        infectious = model.addVars(self._n_regions, self._n_risk_classes, self._n_timesteps + 1, lb=0)
+        hospitalized_dying = model.addVars(self._n_regions, self._n_risk_classes, self._n_timesteps + 1, lb=0)
+        quarantined_dying = model.addVars(self._n_regions, self._n_risk_classes, self._n_timesteps + 1, lb=0)
+        undetected_dying = model.addVars(self._n_regions, self._n_risk_classes, self._n_timesteps + 1, lb=0)
+        deceased = model.addVars(self._n_regions, self._n_risk_classes, self._n_timesteps + 1, lb=0)
+        vaccinated = model.addVars(self._n_regions, self._n_risk_classes, self._n_timesteps + 1, lb=0)
+        eligible = model.addVars(self._n_regions, self._n_risk_classes, self._n_timesteps + 1, lb=0)
+        infectious_error = model.addVars(self._n_regions, self._n_timesteps, lb=0)
+        surplus_vaccines = model.addVars(self._n_regions, self._n_risk_classes, lb=0)
+        unallocated_vaccines = model.addVars(self._n_timesteps, lb=0)
         if self.optimize_capacity:
-            capacity = solver.addVars(self._n_regions, lb=0)
+            capacity = model.addVars(self._n_regions, lb=0)
 
         # Set initial conditions for DELPHI model
-        solver.addConstrs(
+        model.addConstrs(
             susceptible[j, k, 0] == self.initial_susceptible[j, k]
             for j in self._regions for k in self._risk_classes
         )
-        solver.addConstrs(
+        model.addConstrs(
             exposed[j, k, 0] == self.initial_exposed[j, k]
             for j in self._regions for k in self._risk_classes
         )
-        solver.addConstrs(
+        model.addConstrs(
             infectious[j, k, 0] == self.initial_infectious[j, k]
             for j in self._regions for k in self._risk_classes
         )
-        solver.addConstrs(
+        model.addConstrs(
             hospitalized_dying[j, k, 0] == self.initial_hospitalized_dying[j, k]
             for j in self._regions for k in self._risk_classes
         )
-        solver.addConstrs(
+        model.addConstrs(
             quarantined_dying[j, k, 0] == self.initial_quarantined_dying[j, k]
             for j in self._regions for k in self._risk_classes
         )
-        solver.addConstrs(
+        model.addConstrs(
             undetected_dying[j, k, 0] == self.initial_undetected_dying[j, k]
             for j in self._regions for k in self._risk_classes
         )
-        solver.addConstrs(
+        model.addConstrs(
             deceased[j, k, 0] == 0
             for j in self._regions for k in self._risk_classes
         )
 
         # Set DELPHI dynamics constraints
-        solver.addConstrs(
+        model.addConstrs(
             susceptible[j, k, t + 1] - susceptible[j, k, t] + self.vaccine_effectiveness * vaccinated[j, k, t] >=
             - self.infection_rate[j] * self.policy_response[j, t] / self.population[j, :].sum()
             * (susceptible[j, k, t] - self.vaccine_effectiveness * vaccinated[j, k, t])
             * (1 - exploration_rel_tol) * estimated_infectious[j, t] * self.days_per_timestep
-            for j in self._regions for k in self._risk_classes for t in self._planning_timesteps
+            for j in self._regions for k in self._risk_classes for t in self._timesteps
         )
-        solver.addConstrs(
-            susceptible[j, k, t + 1] - susceptible[j, k, t] >=
-            - self.infection_rate[j] * self.policy_response[j, t] / self.population[j, :].sum() * susceptible[j, k, t]
-            * (1 - exploration_rel_tol) * estimated_infectious[j, t] * self.days_per_timestep
-            for j in self._regions for k in self._risk_classes for t in self._non_planning_timesteps
-        )
-        solver.addConstrs(
+        model.addConstrs(
             exposed[j, k, t + 1] - exposed[j, k, t] >= (
                     self.infection_rate[j] * self.policy_response[j, t] / self.population[j, :].sum()
                     * (susceptible[j, k, t] - self.vaccine_effectiveness * vaccinated[j, k, t])
                     * (1 + exploration_rel_tol) * estimated_infectious[j, t]
                     - self.progression_rate * exposed[j, k, t]
             ) * self.days_per_timestep
-            for j in self._regions for k in self._risk_classes for t in self._planning_timesteps
+            for j in self._regions for k in self._risk_classes for t in self._timesteps
         )
-        solver.addConstrs(
-            exposed[j, k, t + 1] - exposed[j, k, t] >= (
-                    self.infection_rate[j] * self.policy_response[j, t] / self.population[j, :].sum()
-                    * susceptible[j, k, t] * (1 + exploration_rel_tol) * estimated_infectious[j, t]
-                    - self.progression_rate * exposed[j, k, t]
-            ) * self.days_per_timestep
-            for j in self._regions for k in self._risk_classes for t in self._non_planning_timesteps
-        )
-        solver.addConstrs(
+        model.addConstrs(
             infectious[j, k, t + 1] - infectious[j, k, t] >= (
                     self.progression_rate * exposed[j, k, t]
                     - self.detection_rate * infectious[j, k, t]
             ) * self.days_per_timestep
             for j in self._regions for k in self._risk_classes for t in self._timesteps
         )
-        solver.addConstrs(
+        model.addConstrs(
             hospitalized_dying[j, k, t + 1] - hospitalized_dying[j, k, t] >= (
-                    self.ihd_transition_rate[k] * infectious[j, k, t]
-                    - self.death_rate * hospitalized_dying[j, k, t]
+                    self.ihd_transition_rate[j, k, t] * infectious[j, k, t]
+                    - self.hospitalized_death_rate * hospitalized_dying[j, k, t]
             ) * self.days_per_timestep
             for j in self._regions for k in self._risk_classes for t in self._timesteps
         )
-        solver.addConstrs(
+        model.addConstrs(
             quarantined_dying[j, k, t + 1] - quarantined_dying[j, k, t] >= (
-                    self.iqd_transition_rate[k] * infectious[j, k, t]
-                    - self.death_rate * quarantined_dying[j, k, t]
+                    self.iqd_transition_rate[j, k, t] * infectious[j, k, t]
+                    - self.unhospitalized_death_rate * quarantined_dying[j, k, t]
             ) * self.days_per_timestep
             for j in self._regions for k in self._risk_classes for t in self._timesteps
         )
-        solver.addConstrs(
+        model.addConstrs(
             undetected_dying[j, k, t + 1] - undetected_dying[j, k, t] >= (
-                    self.iud_transition_rate[k] * infectious[j, k, t]
-                    - self.death_rate * undetected_dying[j, k, t]
+                    self.iud_transition_rate[j, k, t] * infectious[j, k, t]
+                    - self.unhospitalized_death_rate * undetected_dying[j, k, t]
             ) * self.days_per_timestep
             for j in self._regions for k in self._risk_classes for t in self._timesteps
         )
-        solver.addConstrs(
-            deceased[j, k, t + 1] - deceased[j, k, t] >= self.death_rate * (
-                    hospitalized_dying[j, k, t] + quarantined_dying[j, k, t] + undetected_dying[j, k, t]
+        model.addConstrs(
+            deceased[j, k, t + 1] - deceased[j, k, t] >= (
+                    self.hospitalized_death_rate * hospitalized_dying[j, k, t]
+                    + self.unhospitalized_death_rate * (quarantined_dying[j, k, t] + undetected_dying[j, k, t])
             ) * self.days_per_timestep
             for j in self._regions for k in self._risk_classes for t in self._timesteps
         )
 
         # Set bounding constraint on absolute error of estimated infectious
-        solver.addConstrs(
+        model.addConstrs(
             infectious_error[j, t] <= max(exploration_rel_tol * estimated_infectious[j, t], exploration_abs_tol)
             for j in self._regions for t in self._timesteps
         )
-        solver.addConstrs(
+        model.addConstrs(
             infectious_error[j, t] >= estimated_infectious[j, t] - infectious.sum(j, "*", t)
             for j in self._regions for t in self._timesteps
         )
-        solver.addConstrs(
+        model.addConstrs(
             infectious_error[j, t] >= - estimated_infectious[j, t] + infectious.sum(j, "*", t)
             for j in self._regions for t in self._timesteps
         )
 
         # Set resource constraints
-        solver.addConstrs(
+        model.addConstrs(
             eligible[j, k, t] == susceptible[j, k, t] - (1 - self.vaccine_effectiveness)
-            * gp.quicksum(vaccinated[j, k, u] for u in self._planning_timesteps if u < t)
-            for j in self._regions for k in self._included_risk_classes for t in self._planning_timesteps
+            * gp.quicksum(vaccinated[j, k, u] for u in self._timesteps if u < t)
+            for j in self._regions for k in self._included_risk_classes for t in self._timesteps
         )
-        solver.addConstrs(
+        model.addConstrs(
             vaccinated.sum("*", "*", t) <= self.vaccine_budget[t]
-            for t in self._planning_timesteps
+            for t in self._timesteps
         )
-        solver.addConstrs(
+        model.addConstrs(
             vaccinated[j, k, t] <= eligible[j, k, t]
-            for j in self._regions for k in self._included_risk_classes for t in self._planning_timesteps
+            for j in self._regions for k in self._included_risk_classes for t in self._timesteps
         )
-        solver.addConstrs(
-            vaccinated[j, k, t] == 0
-            for j in self._regions for k in self._included_risk_classes for t in self._non_planning_timesteps
-        )
-        solver.addConstrs(
+        model.addConstrs(
             vaccinated[j, k, t] == 0
             for j in self._regions for k in self.excluded_risk_classes for t in self._timesteps
         )
-        solver.addConstrs(
+        model.addConstrs(
             vaccinated.sum(j, "*", t) >= self.min_allocation_pct * eligible.sum(j, "*", t)
-            for j in self._regions for t in self._planning_timesteps
+            for j in self._regions for t in self._timesteps
         )
-        solver.addConstrs(
+        model.addConstrs(
             vaccinated.sum(j, "*", u) >= (1 - self.max_decrease_pct) * vaccinated.sum(j, "*", t)
-            for j in self._regions for t, u in zip(self._planning_timesteps[:-1], self._planning_timesteps[1:])
+            for j in self._regions for t, u in zip(self._timesteps[:-1], self._timesteps[1:])
         )
-        solver.addConstrs(
+        model.addConstrs(
             vaccinated.sum(j, "*", u) <= (1 + self.max_increase_pct) * vaccinated.sum(j, "*", t)
-            for j in self._regions for t, u in zip(self._planning_timesteps[:-1], self._planning_timesteps[1:])
+            for j in self._regions for t, u in zip(self._timesteps[:-1], self._timesteps[1:])
         )
         if self.optimize_capacity:
-            solver.addConstrs(
+            model.addConstrs(
                 capacity[j] >= self.min_allocation_pct * self.initial_susceptible[j, self._included_risk_classes].sum()
                 for j in self._regions
             )
-            solver.addConstrs(
+            model.addConstrs(
                 capacity[j] <= self.max_allocation_pct * self.population[j, :].sum()
                 for j in self._regions
             )
-            solver.addConstrs(
+            model.addConstrs(
                 vaccinated[j, :, t].sum() <= capacity[j]
-                for j in self._regions for t in self._planning_timesteps
+                for j in self._regions for t in self._timesteps
             )
-            solver.addConstrs(
+            model.addConstrs(
                 capacity.sum() <= self.max_total_capacity
             )
         else:
-            solver.addConstrs(
+            model.addConstrs(
                 vaccinated.sum(j, "*", t) <= self.max_allocation_pct * self.population[j, :].sum()
-                for j in self._regions for t in self._planning_timesteps
+                for j in self._regions for t in self._timesteps
             )
 
         # Set constraints for surplus and unallocated vaccines
-        solver.addConstrs(
+        model.addConstrs(
             surplus_vaccines[j, k] >= vaccinated.sum(j, k, "*") - self.population[j, k]
             for j in self._regions for k in self._risk_classes
         )
-        solver.addConstrs(
+        model.addConstrs(
             unallocated_vaccines[t] >= self.vaccine_budget[t] - vaccinated.sum("*", "*", t)
-            for t in self._planning_timesteps
+            for t in self._timesteps
         )
 
         # Set objective
-        solver.setObjective(
+        model.setObjective(
             deceased.sum("*", "*", self._n_timesteps) + hospitalized_dying.sum("*", "*", self._n_timesteps)
             + quarantined_dying.sum("*", "*", self._n_timesteps) + undetected_dying.sum("*", "*", self._n_timesteps)
             + unallocated_vaccines.sum() + surplus_vaccines.sum(),
@@ -582,89 +555,127 @@ class PrescriptiveDELPHIModel:
 
         # Set solver params
         if mip_gap:
-            solver.params.MIPGap = mip_gap
+            model.params.MIPGap = mip_gap
         if feasibility_tol:
-            solver.params.FeasibilityTol = feasibility_tol
+            model.params.FeasibilityTol = feasibility_tol
         if time_limit:
-            solver.params.TimeLimit = time_limit
+            model.params.TimeLimit = time_limit
         if disable_crossover:
-            solver.params.Method = 2
-            solver.params.Crossover = 0
-        solver.params.OutputFlag = output_flag
+            model.params.Method = 2
+            model.params.Crossover = 0
+        model.params.OutputFlag = output_flag
 
         # Solve model
-        solver.optimize()
+        model.optimize()
 
         # Return vaccine allocation
-        vaccinated = solver.getAttr("x", vaccinated)
+        vaccinated = model.getAttr("x", vaccinated)
         vaccinated = np.array([
             [[vaccinated[j, k, t] for t in range(self._n_timesteps + 1)] for k in self._risk_classes]
             for j in self._regions
         ])
         if self.optimize_capacity:
-            capacity = np.array(solver.getAttr("x", capacity))
+            capacity = np.array(model.getAttr("x", capacity))
         else:
             capacity = self.population.sum(axis=1) * self.max_allocation_pct
         return vaccinated, capacity
 
-    def solve(
+    def _smooth_vaccine_allocation(
             self,
-            exploration_rel_tol: float = 0.1,
-            exploration_abs_tol: float = 10.0,
-            termination_tol: float = 1e-2,
+            solution: DELPHISolution,
+            smoothing_window: int,
+            rounding_tol: float,
+    ) -> np.ndarray:
+        """
+        Apply a rolling-window smoothing heuristic to the vaccine allocation policy as a post-processing step.
+
+        :param solution: a DELPHISolution object
+        :param smoothing_window: an integer that specifies the symmetric smoothing window size (default)
+        :param rounding_tol: an integer the specifies the maximum allocation amount that will be rounded to 0 in
+        post-processing (default 1e-3)
+        :return: a numpy array of size (n_regions, n_risk_classes, n_timesteps + 1) representing the smoothed vaccine
+        allocation policy
+        """
+        vaccinated = np.where(solution.vaccinated > rounding_tol, solution.vaccinated, 0)
+        for t in self._timesteps:
+            start = max(t - smoothing_window, 0)
+            end = min(t + smoothing_window, self._n_timesteps)
+            vaccinated[:, :, t] = vaccinated[:, :, start:end].mean(axis=2)
+            vaccinated[:, :, t] = vaccinated[:, :, t] * self.vaccine_budget[t] / vaccinated[:, :, t].sum()
+        return vaccinated
+
+    def optimize(
+            self,
+            exploration_rel_tol: float,
+            exploration_abs_tol: float,
+            termination_tol: float = 1e-3,
             mip_gap: Optional[float] = None,
             feasibility_tol: Optional[float] = None,
             time_limit: Optional[float] = None,
             disable_crossover: bool = False,
             output_flag: bool = False,
-            n_restarts: int = 10,
+            n_restarts: int = 1,
             max_iterations: int = 10,
+            apply_smoothing: bool = True,
+            smoothing_window: int = 1,
+            rounding_tol: float = 1e-3,
             log: bool = False,
             seed: int = 0
-    ) -> Tuple[DiscreteDELPHISolution, List[List[float]]]:
+    ) -> DELPHISolution:
         """
         Solve the prescriptive DELPHI model for vaccine allocation using a coordinate descent heuristic.
+
         :param exploration_rel_tol: a float in [0, 1] that specifies maximum allowed relative error between the
-            estimated  and actual infectious population in any region (default 0.05)
+        estimated  and actual infectious population in any region
         :param exploration_abs_tol: a float  that specifies maximum allowed absolute error between the
-            estimated and actual infectious population in any region (default 10.0)
+        estimated and actual infectious population in any region
         :param termination_tol: a positive float that specifies maximum allowed absolute error between the
-            estimated and actual infectious population in any region
-        :param mip_gap: a float that specifies the maximum MIP gap required for termination  (default 1e-2)
-        :param feasibility_tol: a float that specifies that maximum feasibility tolerance for constraints (default 1e-2)
-        :param time_limit: a float that specifies the maximum solve time in seconds (default 30.0)
-         :param disable_crossover: a boolean that if true disables Gurobi's crossover algorithm, which used to clean up
-            the interior solution of the barrier method into a basic feasible solution (default False)
+        estimated and actual infectious population in any region (default 1e-3)
+        :param mip_gap: an optional float that if set overrides Gurobi's default maximum MIP gap required for
+        termination (default None)
+        :param feasibility_tol: an optional float that if set overrides Gurobi's default maximum feasibility tolerance
+        for constraints (default None)
+        :param time_limit: an optional float that if set specifies the maximum solve time in seconds (default None)
+        :param disable_crossover: a  boolean that if true disables Gurobi's crossover algorithm, which used to clean up
+        the interior solution of the barrier method into a basic feasible solution (default False)
         :param output_flag: a boolean that specifies whether to show the solver logs (default False)
-        :param n_restarts: an integer that specifies the number of random restarts (default 10)
+        :param n_restarts: an integer that specifies the number of restarts, with a smart start provided if set to 1
+        else randomized starts provided (default 1)
         :param max_iterations: an integer that specifies the maximum number of descent iterations per trial (default 10)
+        :param apply_smoothing: a boolean that if true applies an additional smoothing heuristic to the solution in
+        post-processing(default True)
+        :param smoothing_window: an integer that specifies the symmetric smoothing window size (default)
+        :param rounding_tol: an integer the specifies the maximum allocation amount that will be rounded to 0 in
+        post-processing (default 1e-3)
+        :param log: a boolean that specifies whether to log progress
         :param seed: an integer that is used to set the numpy seed
-        :param log:
-        :return: a tuple containing a DiscreteDELPHISolution object and list of lists of float representing the descent
-            trajectories
+        :return: a DELPHISolution object
         """
 
         # Initialize algorithm
         np.random.seed(seed)
         trajectories = []
         best_solution = None
-        best_objective = np.inf
+        best_obj_val = np.inf
 
         for restart in range(n_restarts):
 
             # Initialize a feasible solution
             trajectory = []
-            incumbent_solution = self.simulate(randomize_allocation=False, prioritization_allocation=True)
-            incumbent_objective = incumbent_solution.get_objective()
+            incumbent_solution = self.simulate(
+                randomize_allocation=n_restarts > 1,
+                prioritization_allocation=True
+            )
+            incumbent_obj_val = incumbent_solution.get_objective_value()
 
             if log:
                 print(f"Restart: {restart + 1}/{n_restarts}")
-                print(f"Iteration: 0/{max_iterations} \t Objective value: {'{0:.2f}'.format(incumbent_objective)}")
+                print(f"Iteration: 0/{max_iterations} \t Objective value: {'{0:.2f}'.format(incumbent_obj_val)}")
 
             for i in range(max_iterations):
 
                 # Store incumbent objective in trajectory
-                trajectory.append(incumbent_objective)
+                trajectory.append(incumbent_obj_val)
 
                 # Re-optimize vaccine allocation by solution linearized relaxation
                 try:
@@ -685,17 +696,18 @@ class PrescriptiveDELPHIModel:
 
                 # Update incumbent solution
                 previous_solution, incumbent_solution = incumbent_solution, self.simulate(vaccinated=vaccinated)
-                previous_objective, incumbent_objective = incumbent_objective, incumbent_solution.get_objective()
+                previous_obj_val, incumbent_obj_val = incumbent_obj_val, incumbent_solution.get_objective_value()
                 incumbent_solution.capacity = capacity
                 if log:
-                    print(f"Iteration: {i + 1}/{max_iterations} \t Objective value: {'{0:.2f}'.format(incumbent_objective)}")
+                    print(f"Iteration: {i + 1}/{max_iterations} \t Objective value: {'{0:.2f}'.format(incumbent_obj_val)}")
 
                 # Terminate if solution convergences
-                objective_change = abs(previous_objective - incumbent_objective)
-                estimated_infectious_change = np.abs(previous_solution.infectious.sum(axis=1)
-                                                     - incumbent_solution.infectious.sum(axis=1)).mean()
+                objective_change = abs(previous_obj_val - incumbent_obj_val)
+                estimated_infectious_change = np.abs(
+                    previous_solution.infectious.sum(axis=1) - incumbent_solution.infectious.sum(axis=1)
+                ).mean()
                 if max(objective_change, estimated_infectious_change) < termination_tol:
-                    trajectory.append(incumbent_objective)
+                    trajectory.append(incumbent_obj_val)
                     if log:
                         print("No improvement found - terminating search")
                     break
@@ -704,8 +716,19 @@ class PrescriptiveDELPHIModel:
             trajectories.append(trajectory)
 
             # If the policy produced during the random trial is better than current one, update all parameters
-            if incumbent_objective < best_objective:
-                best_objective = incumbent_objective
+            if incumbent_obj_val < best_obj_val:
+                best_obj_val = incumbent_obj_val
                 best_solution = incumbent_solution
 
-        return best_solution, trajectories
+        if apply_smoothing:
+            if log:
+                print("Smoothing vaccine allocation policy")
+            vaccinated = self._smooth_vaccine_allocation(
+                solution=best_solution,
+                smoothing_window=smoothing_window,
+                rounding_tol=rounding_tol
+            )
+            best_solution = self.simulate(vaccinated=vaccinated)
+            if log:
+                print(f"Objective value after post-processing: {'{0:.2f}'.format(best_solution.get_objective_value())}")
+        return best_solution
