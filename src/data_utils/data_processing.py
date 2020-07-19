@@ -66,20 +66,22 @@ def get_mortality_rate_estimates(
 ) -> np.ndarray:
     population = get_population_by_state_and_risk_class(pop_df=pop_df)
     baseline_mortality_rate = get_baseline_mortality_rate_estimates(cdc_df=cdc_df)
-    states = pop_df["states"].unique()
+    states = pop_df["state"].unique()
     mortality_rate = np.ndarray((N_REGIONS, N_RISK_CLASSES, N_TIMESTEPS))
+
     for j, state in enumerate(states):
-        cases, deaths = predictions_df[
+        mortality_predictions = predictions_df[
             (predictions_df["date"] >= start_date)
             & (predictions_df["state"] == state)
         ][["exposed", "deceased"]].diff().dropna()
+
         mortality_rate[j, :, :] = MortalityRateEstimator(
-            cases=cases,
-            deaths=deaths,
+            cases=mortality_predictions['exposed'].to_numpy(),
+            deaths=mortality_predictions['deceased'].to_numpy(),
             baseline_mortality_rate=baseline_mortality_rate,
             population=population[j, :],
             max_pct_change=MAX_PCT_CHANGE,
-            max_pct_population_deviation=MAX_PCT_CHANGE,
+            max_pct_population_deviation=MAX_PCT_POPULATION_DEVIATION,
             n_timesteps_per_estimate=N_TIMESTEPS_PER_ESTIMATE
         ).solve()[0]
     return mortality_rate
@@ -101,7 +103,7 @@ def get_initial_conditions(
     initial_infectious = deepcopy(initial_default)
     initial_conditions_df = predictions_df[
         predictions_df["date"] == start_date
-        ].sort_values("state")[["susceptible", "exposed", "infected"]]
+        ].sort_values("state")[["susceptible", "exposed", "infectious"]]
     for j, (_, state) in enumerate(initial_conditions_df.iterrows()):
         pop_proportions = population[j, :] / population[j, :].sum()
         initial_susceptible[j, :] = state["susceptible"] * pop_proportions

@@ -28,6 +28,14 @@ class MortalityRateEstimator:
         self.max_pct_population_deviation = max_pct_population_deviation
 
         # Set helper attributes
+        self._pop_proportions = self.population / self.population.sum()
+        self._n_risk_classes = baseline_mortality_rate.shape[0]
+        self._n_timesteps = deaths.shape[0]
+        self._n_estimation_periods = int(np.ceil(self._n_timesteps / self.n_timesteps_per_estimate))
+        self._risk_classes = np.arange(self._n_risk_classes)
+        self._timesteps = np.arange(self._n_timesteps)
+        self._estimation_periods = np.arange(self._n_estimation_periods)
+
         self._total_cases = [
             self.cases[p * self.n_timesteps_per_estimate:(p + 1) * self.n_timesteps_per_estimate].sum()
             for p in self._estimation_periods
@@ -36,13 +44,6 @@ class MortalityRateEstimator:
             self.deaths[p * self.n_timesteps_per_estimate:(p + 1) * self.n_timesteps_per_estimate].sum()
             for p in self._estimation_periods
         ]
-        self._pop_proportions = self.population / self.population.sum()
-        self._n_risk_classes = baseline_mortality_rate.shape[0]
-        self._n_timesteps = deaths.shape[0]
-        self._n_estimation_periods = int(np.ceil(self._n_timesteps / self.n_timesteps_per_estimate))
-        self._risk_classes = np.arange(self._n_risk_classes)
-        self._timesteps = np.arange(self._n_timesteps)
-        self._estimation_periods = np.arange(self._n_estimation_periods)
 
     def _get_warm_start(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         deaths = np.zeros((self._n_risk_classes, self._n_estimation_periods))
@@ -58,8 +59,8 @@ class MortalityRateEstimator:
             mip_gap: Optional[float] = None,
             feasibility_tol: Optional[float] = None,
             time_limit: Optional[float] = None,
-            output_flag: bool = False
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+            output_flag: bool = True
+    ) -> Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]]:
 
         # Initialize model
         model = gp.Model()
@@ -83,34 +84,34 @@ class MortalityRateEstimator:
         # Set constraints to roughly align cases with population subset size
         model.addConstrs(
             cases[k, p] <= (1 + self.max_pct_population_deviation) * self._pop_proportions[k] * self._total_cases[p]
-            for k in self._n_risk_classes for p in self._estimation_periods
+            for k in self._risk_classes for p in self._estimation_periods
         )
         model.addConstrs(
             cases[k, p] <= (1 - self.max_pct_population_deviation) * self._pop_proportions[k] * self._total_cases[p]
-            for k in self._n_risk_classes for p in self._estimation_periods
+            for k in self._risk_classes for p in self._estimation_periods
         )
 
         # Set constraints for smoothness
         model.addConstrs(
-            mortality_rate[p + 1] <= (1 + self.max_pct_change) * mortality_rate[p]
-            for p in np.arange(self._n_estimation_periods - 1)
+            mortality_rate[k, p + 1] <= (1 + self.max_pct_change) * mortality_rate[k, p]
+            for k in self._risk_classes for p in np.arange(self._n_estimation_periods - 1)
         )
         model.addConstrs(
-            mortality_rate[p + 1] >= (1 - self.max_pct_change) * mortality_rate[p]
-            for p in np.arange(self._n_estimation_periods - 1)
+            mortality_rate[k, p + 1] >= (1 - self.max_pct_change) * mortality_rate[k, p]
+            for k in self._risk_classes for p in np.arange(self._n_estimation_periods - 1)
         )
 
         # Set bi-linear constraints to define mortality rate
         model.addConstrs(
             mortality_rate[k, p] * cases[k, p] == deaths[k, p]
-            for k in self._n_risk_classes for p in self._estimation_periods
+            for k in self._risk_classes for p in self._estimation_periods
         )
 
         # Set objective
         model.addConstrs(
             error[k, p] >= (mortality_rate[k, p] - self.baseline_mortality_rate[k])
             * (mortality_rate[k, p] - self.baseline_mortality_rate[k])
-            for k in self._n_risk_classes for p in self._estimation_periods
+            for k in self._risk_classes for p in self._estimation_periods
         )
         model.setObjective(error.sum(), GRB.MINIMIZE)
 
@@ -134,6 +135,9 @@ class MortalityRateEstimator:
         # Solve model
         model.optimize()
 
-        return np.ndarray(model.getAttr("x", mortality_rate)), \
-               np.ndarray(model.getAttr("x", deaths)), \
-               np.ndarray(model.getAttr("x", cases))
+        if model.status == GRB.OPTIMAL:
+            return np.ndarray(model.getAttr("x", mortality_rate)), \
+                   np.ndarray(model.getAttr("x", deaths)), \
+                   np.ndarray(model.getAttr("x", cases))
+
+        print('\nModel was not solved to optimality.')
