@@ -73,17 +73,17 @@ def get_mortality_rate_estimates(
         mortality_predictions = predictions_df[
             (predictions_df["date"] >= start_date)
             & (predictions_df["state"] == state)
-        ][["exposed", "deceased"]].diff().dropna()
+        ][["total_detected", "deceased"]].diff().dropna()
 
         mortality_rate[j, :, :] = MortalityRateEstimator(
-            cases=mortality_predictions['exposed'].to_numpy(),
+            cases=mortality_predictions['total_detected'].to_numpy(),
             deaths=mortality_predictions['deceased'].to_numpy(),
             baseline_mortality_rate=baseline_mortality_rate,
             population=population[j, :],
             max_pct_change=MAX_PCT_CHANGE,
             max_pct_population_deviation=MAX_PCT_POPULATION_DEVIATION,
             n_timesteps_per_estimate=N_TIMESTEPS_PER_ESTIMATE
-        ).solve()[0]
+        ).solve(objective_weight=1e-4, feasibility_tol=1e-5, check_model_output=True if j == 0 else False)[0]
     return mortality_rate
 
 

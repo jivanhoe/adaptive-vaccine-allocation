@@ -19,13 +19,13 @@ N_REGIONS = 51  # All 50 US states plus Washington D.C.
 N_RISK_CLASSES = len(RISK_CLASSES)
 
 # Planning horizon and granularity
-N_TIMESTEPS = 90  # 3-month planning period
+N_TIMESTEPS = 91  # 3-month planning period
 DAYS_PER_TIMESTEP = 1.0
 
 # Mortality rate estimation parameters
 MAX_PCT_CHANGE = 0.2
 MAX_PCT_POPULATION_DEVIATION = 0.3
-N_TIMESTEPS_PER_ESTIMATE = 10
+N_TIMESTEPS_PER_ESTIMATE = 1
 
 # Fixed DELPHI parameters
 DETECTION_PROBABILITY = 0.2

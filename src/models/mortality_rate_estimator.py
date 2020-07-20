@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import gurobipy as gp
 from gurobipy import GRB
 
@@ -56,10 +57,12 @@ class MortalityRateEstimator:
 
     def solve(
             self,
+            objective_weight: Optional[float] = 1e-3,
             mip_gap: Optional[float] = None,
             feasibility_tol: Optional[float] = None,
             time_limit: Optional[float] = None,
-            output_flag: bool = True
+            output_flag: bool = True,
+            check_model_output: bool = True,
     ) -> Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]]:
 
         # Initialize model
@@ -69,37 +72,41 @@ class MortalityRateEstimator:
         mortality_rate = model.addVars(self._n_risk_classes, self._n_estimation_periods, lb=0)
         deaths = model.addVars(self._n_risk_classes, self._n_estimation_periods, lb=0)
         cases = model.addVars(self._n_risk_classes, self._n_estimation_periods, lb=0)
-        error = model.addVars(self._n_risk_classes, self._n_estimation_periods, lb=0)
+        mortality_error = model.addVars(self._n_risk_classes, self._n_estimation_periods, lb=0)
+        cases_error = model.addVars(self._n_risk_classes, self._n_estimation_periods, lb=0)
+        cases_bound = model.addVar()
+        deaths_bound = model.addVar()
 
         # Set constraints to enforce consistency with data
         model.addConstrs(
-            cases.sum("*", p) == self._total_cases[p]
+             cases_bound >= self._total_cases[p] - cases.sum("*", p)
+             for p in self._estimation_periods
+        )
+        model.addConstrs(
+            cases_bound >= - self._total_cases[p] + cases.sum("*", p)
             for p in self._estimation_periods
         )
         model.addConstrs(
-            deaths.sum("*", p) == self._total_deaths[p]
+            deaths_bound >= self._total_deaths[p] - deaths.sum("*", p)
+            for p in self._estimation_periods
+        )
+        model.addConstrs(
+            deaths_bound >= - self._total_deaths[p] + deaths.sum("*", p)
             for p in self._estimation_periods
         )
 
         # Set constraints to roughly align cases with population subset size
         model.addConstrs(
-            cases[k, p] <= (1 + self.max_pct_population_deviation) * self._pop_proportions[k] * self._total_cases[p]
+            cases_error[k, p] >= cases[k, p] - self._pop_proportions[k] * self._total_cases[p]
             for k in self._risk_classes for p in self._estimation_periods
         )
         model.addConstrs(
-            cases[k, p] <= (1 - self.max_pct_population_deviation) * self._pop_proportions[k] * self._total_cases[p]
+            cases_error[k, p] >= self._pop_proportions[k] * self._total_cases[p] - cases[k, p]
             for k in self._risk_classes for p in self._estimation_periods
         )
 
-        # Set constraints for smoothness
-        model.addConstrs(
-            mortality_rate[k, p + 1] <= (1 + self.max_pct_change) * mortality_rate[k, p]
-            for k in self._risk_classes for p in np.arange(self._n_estimation_periods - 1)
-        )
-        model.addConstrs(
-            mortality_rate[k, p + 1] >= (1 - self.max_pct_change) * mortality_rate[k, p]
-            for k in self._risk_classes for p in np.arange(self._n_estimation_periods - 1)
-        )
+        # Set feasibility constraint
+        model.addConstrs(cases[k, p] >= deaths[k, p] for k in self._risk_classes for p in self._estimation_periods)
 
         # Set bi-linear constraints to define mortality rate
         model.addConstrs(
@@ -109,11 +116,15 @@ class MortalityRateEstimator:
 
         # Set objective
         model.addConstrs(
-            error[k, p] >= (mortality_rate[k, p] - self.baseline_mortality_rate[k])
-            * (mortality_rate[k, p] - self.baseline_mortality_rate[k])
+            mortality_error[k, p] >= (mortality_rate[k, p] - self.baseline_mortality_rate[k])
             for k in self._risk_classes for p in self._estimation_periods
         )
-        model.setObjective(error.sum(), GRB.MINIMIZE)
+        model.addConstrs(
+            mortality_error[k, p] >= - (mortality_rate[k, p] + self.baseline_mortality_rate[k])
+            for k in self._risk_classes for p in self._estimation_periods
+        )
+        model.setObjective(mortality_error.sum() + objective_weight * (cases_error.sum() + cases_bound + deaths_bound)
+                           , GRB.MINIMIZE)
 
         # Set warm start
         _, cases_warm_start, deaths_warm_start = self._get_warm_start()
@@ -135,9 +146,45 @@ class MortalityRateEstimator:
         # Solve model
         model.optimize()
 
-        if model.status == GRB.OPTIMAL:
-            return np.ndarray(model.getAttr("x", mortality_rate)), \
-                   np.ndarray(model.getAttr("x", deaths)), \
-                   np.ndarray(model.getAttr("x", cases))
+        # Infeasibility de-bug
+        if model.status == GRB.INFEASIBLE:
+            model.computeIIS()
+            print('\nModel was not solved to optimality.')
+            print(f"Violated constraints at indices: {[idx for idx, val in enumerate(model.IISCONSTR) if val == 1]}")
 
-        print('\nModel was not solved to optimality.')
+        if model.status == GRB.OPTIMAL:
+            mortality_rate = model.getAttr("x", mortality_rate)
+            deaths = model.getAttr("x", deaths)
+            cases = model.getAttr("x", cases)
+
+            mortality_rate = np.array([
+                [mortality_rate[k, t] for t in self._estimation_periods] for k in self._risk_classes
+            ])
+            deaths = np.array([
+                [deaths[k, t] for t in self._estimation_periods] for k in self._risk_classes
+            ])
+            cases = np.array([
+                [cases[k, t] for t in self._estimation_periods] for k in self._risk_classes
+            ])
+
+            if check_model_output:
+                print("\n" * 2, self._summarize_mortality_estimates(mortality_rate, deaths, cases))
+
+            return mortality_rate, deaths, cases
+
+    def _summarize_mortality_estimates(self,
+                                       mortality_rate: np.ndarray,
+                                       deaths: np.ndarray,
+                                       cases: np.ndarray) -> pd.DataFrame:
+
+        table = pd.DataFrame({
+            'Baseline Mortality': self.baseline_mortality_rate,
+            'Model Mortality': mortality_rate.mean(axis=1),
+            'True Cases (avg)': self._pop_proportions * np.mean(self._total_cases),
+            'Model Cases (avg)': cases.mean(axis=1),
+            'True Deaths (avg)': self._pop_proportions * np.mean(self._total_deaths),
+            'Model Deaths (avg)': deaths.mean(axis=1)
+
+        }, index=['0-9', '10-49', '50-59', '60-69', '70-79', '80-inf'])
+
+        return table
