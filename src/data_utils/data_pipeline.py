@@ -1,15 +1,16 @@
+import datetime as dt
+
+import pandas as pd
+
+from data_utils.constants import *
 from data_utils.data_loading import load_and_clean_delphi_params, load_and_clean_delphi_predictions
 from data_utils.data_processing import get_initial_conditions, get_delphi_params, get_vaccine_params
-from data_utils.constants import *
 from models.prescriptive_delphi_model import PrescriptiveDELPHIModel
-import pandas as pd
-import datetime as dt
-from typing import Dict
 
 
 def load_model(
         start_date: dt.datetime,
-        vaccine_params: Dict[str, any]
+        end_date: dt.datetime
 ) -> PrescriptiveDELPHIModel:
 
     # Load raw data
@@ -29,7 +30,13 @@ def load_model(
         cdc_df=cdc_df,
         params_df=params_df,
         predictions_df=predictions_df,
-        start_date=start_date
+        start_date=start_date,
+        end_date=end_date
+    )
+    vaccine_params = get_vaccine_params(
+        total_pop=initial_conditions["population"].sum(),
+        start_date=start_date,
+        end_date=end_date
     )
 
     # Return prescriptive DELPHI model object
