@@ -58,6 +58,7 @@ def load_and_clean_delphi_predictions(path: str) -> pd.DataFrame:
             "R",
             "D",
             "DT",
+            "DD",
             "recovering",
             "dying"
         ]
@@ -70,7 +71,8 @@ def load_and_clean_delphi_predictions(path: str) -> pd.DataFrame:
             "I": "infectious",
             "R": "recovered",
             "D": "deceased",
-            "DT": "total_detected"
+            "DT": "total_detected_cases",
+            "DD": "total_detected_deaths",
         }
     )
 
