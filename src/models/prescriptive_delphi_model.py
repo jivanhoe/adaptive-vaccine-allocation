@@ -128,8 +128,7 @@ class PrescriptiveDELPHIModel:
         self.iqr_transition_rate = delphi_params["iqr_transition_rate"]
         self.iud_transition_rate = delphi_params["iud_transition_rate"]
         self.iur_transition_rate = delphi_params["iur_transition_rate"]
-        self.hospitalized_death_rate = delphi_params["hospitalized_death_rate"]
-        self.unhospitalized_death_rate = delphi_params["unhospitalized_death_rate"]
+        self.death_rate = delphi_params["death_rate"]
         self.hospitalized_recovery_rate = delphi_params["hospitalized_recovery_rate"]
         self.unhospitalized_recovery_rate = delphi_params["unhospitalized_recovery_rate"]
         self.mortality_rate = delphi_params["mortality_rate"]
@@ -272,44 +271,43 @@ class PrescriptiveDELPHIModel:
             infectious[:, :, t + 1] = np.maximum(infectious[:, :, t + 1], 0)
 
             hospitalized_dying[:, :, t + 1] = hospitalized_dying[:, :, t] + (
-                    self.ihd_transition_rate * infectious[:, :, t]
-                    - self.hospitalized_death_rate * hospitalized_dying[:, :, t]
+                    self.ihd_transition_rate[:, :, t] * infectious[:, :, t]
+                    - self.death_rate[:, None] * hospitalized_dying[:, :, t]
             ) * self.days_per_timestep
             hospitalized_dying[:, :, t + 1] = np.maximum(hospitalized_dying[:, :, t + 1], 0)
 
             hospitalized_recovering[:, :, t + 1] = hospitalized_recovering[:, :, t] + (
-                    self.ihr_transition_rate * infectious[:, :, t]
+                    self.ihr_transition_rate[:, :, t] * infectious[:, :, t]
                     - self.hospitalized_recovery_rate * hospitalized_recovering[:, :, t]
             ) * self.days_per_timestep
             hospitalized_recovering[:, :, t + 1] = np.maximum(hospitalized_recovering[:, :, t + 1], 0)
 
             quarantined_dying[:, :, t + 1] = quarantined_dying[:, :, t] + (
-                    self.iqd_transition_rate * infectious[:, :, t]
-                    - self.unhospitalized_death_rate * quarantined_dying[:, :, t]
+                    self.iqd_transition_rate[:, :, t] * infectious[:, :, t]
+                    - self.death_rate[:, None] * quarantined_dying[:, :, t]
             ) * self.days_per_timestep
             quarantined_dying[:, :, t + 1] = np.maximum(quarantined_dying[:, :, t + 1], 0)
 
             quarantined_recovering[:, :, t + 1] = quarantined_recovering[:, :, t] + (
-                    self.iqr_transition_rate * infectious[:, :, t]
+                    self.iqr_transition_rate[:, :, t] * infectious[:, :, t]
                     - self.unhospitalized_recovery_rate * quarantined_recovering[:, :, t]
             ) * self.days_per_timestep
             quarantined_recovering[:, :, t + 1] = np.maximum(quarantined_recovering[:, :, t + 1], 0)
 
             undetected_dying[:, :, t + 1] = undetected_dying[:, :, t] + (
-                    self.iud_transition_rate * infectious[:, :, t]
-                    - self.unhospitalized_death_rate * undetected_dying[:, :, t]
+                    self.iud_transition_rate[:, :, t] * infectious[:, :, t]
+                    - self.death_rate[:, None] * undetected_dying[:, :, t]
             ) * self.days_per_timestep
             undetected_dying[:, :, t + 1] = np.maximum(undetected_dying[:, :, t + 1], 0)
 
             undetected_recovering[:, :, t + 1] = undetected_recovering[:, :, t] + (
-                    self.iur_transition_rate * infectious[:, :, t]
+                    self.iur_transition_rate[:, :, t] * infectious[:, :, t]
                     - self.unhospitalized_recovery_rate * undetected_recovering[:, :, t]
             ) * self.days_per_timestep
             undetected_recovering[:, :, t + 1] = np.maximum(undetected_recovering[:, :, t + 1], 0)
 
-            deceased[:, :, t + 1] = deceased[:, :, t] + (
-                    self.hospitalized_death_rate * hospitalized_dying[:, :, t]
-                    + self.unhospitalized_death_rate * (quarantined_dying[:, :, t] + undetected_dying[:, :, t])
+            deceased[:, :, t + 1] = deceased[:, :, t] + self.death_rate[:, None] * (
+                    hospitalized_dying[:, :, t] + quarantined_dying[:, :, t] + undetected_dying[:, :, t]
             ) * self.days_per_timestep
 
             recovered[:, :, t + 1] = recovered[:, :, t] + (
@@ -443,28 +441,27 @@ class PrescriptiveDELPHIModel:
         model.addConstrs(
             hospitalized_dying[j, k, t + 1] - hospitalized_dying[j, k, t] >= (
                     self.ihd_transition_rate[j, k, t] * infectious[j, k, t]
-                    - self.hospitalized_death_rate * hospitalized_dying[j, k, t]
+                    - self.death_rate[j] * hospitalized_dying[j, k, t]
             ) * self.days_per_timestep
             for j in self._regions for k in self._risk_classes for t in self._timesteps
         )
         model.addConstrs(
             quarantined_dying[j, k, t + 1] - quarantined_dying[j, k, t] >= (
                     self.iqd_transition_rate[j, k, t] * infectious[j, k, t]
-                    - self.unhospitalized_death_rate * quarantined_dying[j, k, t]
+                    - self.death_rate[j] * quarantined_dying[j, k, t]
             ) * self.days_per_timestep
             for j in self._regions for k in self._risk_classes for t in self._timesteps
         )
         model.addConstrs(
             undetected_dying[j, k, t + 1] - undetected_dying[j, k, t] >= (
                     self.iud_transition_rate[j, k, t] * infectious[j, k, t]
-                    - self.unhospitalized_death_rate * undetected_dying[j, k, t]
+                    - self.death_rate[j] * undetected_dying[j, k, t]
             ) * self.days_per_timestep
             for j in self._regions for k in self._risk_classes for t in self._timesteps
         )
         model.addConstrs(
-            deceased[j, k, t + 1] - deceased[j, k, t] >= (
-                    self.hospitalized_death_rate * hospitalized_dying[j, k, t]
-                    + self.unhospitalized_death_rate * (quarantined_dying[j, k, t] + undetected_dying[j, k, t])
+            deceased[j, k, t + 1] - deceased[j, k, t] >= self.death_rate[j] * (
+                     hospitalized_dying[j, k, t] + quarantined_dying[j, k, t] + undetected_dying[j, k, t]
             ) * self.days_per_timestep
             for j in self._regions for k in self._risk_classes for t in self._timesteps
         )
@@ -606,9 +603,9 @@ class PrescriptiveDELPHIModel:
 
     def optimize(
             self,
-            exploration_rel_tol: float,
-            exploration_abs_tol: float,
-            termination_tol: float = 1e-3,
+            exploration_rel_tol: float = 0.0,
+            exploration_abs_tol: float = 1.0,
+            termination_tol: float = 1e-2,
             mip_gap: Optional[float] = None,
             feasibility_tol: Optional[float] = None,
             time_limit: Optional[float] = None,
@@ -618,7 +615,7 @@ class PrescriptiveDELPHIModel:
             max_iterations: int = 10,
             apply_smoothing: bool = True,
             smoothing_window: int = 1,
-            rounding_tol: float = 1e-3,
+            rounding_tol: float = 1e-2,
             log: bool = False,
             seed: int = 0
     ) -> DELPHISolution:
@@ -626,9 +623,9 @@ class PrescriptiveDELPHIModel:
         Solve the prescriptive DELPHI model for vaccine allocation using a coordinate descent heuristic.
 
         :param exploration_rel_tol: a float in [0, 1] that specifies maximum allowed relative error between the
-        estimated  and actual infectious population in any region
+        estimated  and actual infectious population in any region (default 0)
         :param exploration_abs_tol: a float  that specifies maximum allowed absolute error between the
-        estimated and actual infectious population in any region
+        estimated and actual infectious population in any region (default 1)
         :param termination_tol: a positive float that specifies maximum allowed absolute error between the
         estimated and actual infectious population in any region (default 1e-3)
         :param mip_gap: an optional float that if set overrides Gurobi's default maximum MIP gap required for

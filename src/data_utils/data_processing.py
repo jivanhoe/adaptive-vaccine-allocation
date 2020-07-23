@@ -26,8 +26,7 @@ def calculate_n_timesteps(
     start_date: dt.datetime,
     end_date: dt.datetime
 ) -> int:
-    n_days = (end_date - start_date).days
-    return int(np.round(n_days / DAYS_PER_TIMESTEP)) - 1
+    return int(np.round((end_date - start_date).days / DAYS_PER_TIMESTEP))
 
 
 def get_policy_response_by_state_and_timestep(
@@ -61,9 +60,22 @@ def get_baseline_mortality_rate_estimates(cdc_df: pd.DataFrame) -> np.ndarray:
     return baseline_mortality_rate
 
 
+def get_lag_estimates(params_df: pd.DataFrame) -> List[dt.timedelta]:
+    return [
+        dt.timedelta(days=lag) for lag in np.ceil(
+            np.clip(
+                np.log(2) / params_df["death_rate"],
+                a_min=MEDIAN_PROGRESSION_TIME,
+                a_max=MEDIAN_PROGRESSION_TIME + MEDIAN_DETECTION_TIME + MEDIAN_UNHOSPITALIZED_RECOVERY_TIME
+            )
+        )
+    ]
+
+
 def get_mortality_rate_estimates(
         pop_df: pd.DataFrame,
         cdc_df: pd.DataFrame,
+        params_df: pd.DataFrame,
         predictions_df: pd.DataFrame,
         start_date: dt.datetime,
         end_date: dt.datetime
@@ -72,6 +84,7 @@ def get_mortality_rate_estimates(
     # Get data
     population = get_population_by_state_and_risk_class(pop_df=pop_df)
     baseline_mortality_rate = get_baseline_mortality_rate_estimates(cdc_df=cdc_df)
+    lag = get_lag_estimates(params_df=params_df)
 
     # Initialize grid
     n_timesteps = calculate_n_timesteps(start_date=start_date, end_date=end_date)
@@ -79,39 +92,47 @@ def get_mortality_rate_estimates(
 
     # Perform estimation for each state
     for j, state in enumerate(pop_df["state"].unique()):
-        predicted = predictions_df[
-            (predictions_df["date"] >= start_date)
+        cases = predictions_df[
+            (predictions_df["state"] == state)
+            & (predictions_df["date"] >= start_date - lag[j])
+            & (predictions_df["date"] <= end_date - lag[j])
+        ]["total_detected_cases"].diff().dropna().to_numpy()
+        deaths = predictions_df[
+            (predictions_df["state"] == state)
+            & (predictions_df["date"] >= start_date)
             & (predictions_df["date"] <= end_date)
-            & (predictions_df["state"] == state)
-        ][["total_detected_cases", "total_detected_deaths"]].diff().dropna()
+        ]["total_detected_deaths"].diff().dropna().to_numpy()
+        deaths = np.where(deaths / cases <= MAX_MORTALITY_RATE, deaths, MAX_MORTALITY_RATE * cases)
         mortality_rate_estimator = MortalityRateEstimator(
-            cases=predicted["total_detected_cases"].to_numpy(),
-            deaths=predicted["total_detected_deaths"].to_numpy(),
+            cases=cases,
+            deaths=deaths,
             baseline_mortality_rate=baseline_mortality_rate,
             population=population[j, :],
             n_timesteps_per_estimate=N_TIMESTEPS_PER_ESTIMATE,
             max_pct_change=MAX_PCT_CHANGE,
-            max_pct_cases_deviation=MAX_PCT_CASES_DEVIATION,
-            max_pct_mortality_rate_deviation=MAX_PCT_MORTALITY_RATE_DEVIATION,
+            min_mortality_rate=MIN_MORTALITY_RATE,
             regularization_param=REGULARIZATION_PARAM,
-            use_l2_error=USE_L2_ERROR,
-            relax_cases_deviation_constraint=False
+            enforce_monotonicity=True
         )
         try:
             mortality_rate[j, :, :] = mortality_rate_estimator.solve(
                 time_limit=TIME_LIMIT,
                 feasibility_tol=FEASIBILITY_TOL,
-                output_flag=False
+                mip_gap=MIP_GAP,
+                output_flag=False,
             )[0]
+            print(f"Completed calibration for {state}")
         except GurobiError:
             try:
-                print(f"Infeasible problem for {state} - relaxing constraints")
-                mortality_rate_estimator.relax_cases_deviation_constraint = True
+                print(f"Infeasible problem for {state} - relaxing monotonicity constraints")
+                mortality_rate_estimator.enforce_monotonicity = False
                 mortality_rate[j, :, :] = mortality_rate_estimator.solve(
                     time_limit=TIME_LIMIT,
                     feasibility_tol=FEASIBILITY_TOL,
+                    mip_gap=MIP_GAP,
                     output_flag=False
                 )[0]
+                print(f"Completed calibration for {state}")
             except GurobiError:
                 print(f"Error calibrating mortality rates for {state} - using baseline estimates")
                 mortality_rate[j, :, :] = baseline_mortality_rate[:, None]
@@ -145,7 +166,7 @@ def get_initial_conditions(
     initial_infectious = deepcopy(initial_default)
     initial_conditions_df = predictions_df[
         predictions_df["date"] == start_date
-        ].sort_values("state")[["susceptible", "exposed", "infectious"]]
+    ].sort_values("state")[["susceptible", "exposed", "infectious"]]
     for j, (_, state) in enumerate(initial_conditions_df.iterrows()):
         pop_proportions = population[j, :] / population[j, :].sum()
         initial_susceptible[j, :] = state["susceptible"] * pop_proportions
@@ -188,6 +209,7 @@ def get_delphi_params(
     mortality_rate = get_mortality_rate_estimates(
         pop_df=pop_df,
         cdc_df=cdc_df,
+        params_df=params_df,
         predictions_df=predictions_df,
         start_date=start_date,
         end_date=end_date
@@ -200,10 +222,8 @@ def get_delphi_params(
     # Convert median times to rates
     progression_rate = np.log(2) / MEDIAN_PROGRESSION_TIME
     detection_rate = np.log(2) / MEDIAN_DETECTION_TIME
-    hospitalized_death_rate = np.log(2) / MEDIAN_HOSPITALIZED_DEATH_TIME
-    unhospitalized_death_rate = np.log(2) / MEDIAN_UNHOSPITALIZED_DEATH_TIME
     hospitalized_recovery_rate = np.log(2) / MEDIAN_HOSPITALIZED_RECOVERY_TIME
-    unhospitalized_recovery_rate = np.log(2) / MEDIAN_UNHOSPITALIZED_DEATH_TIME
+    unhospitalized_recovery_rate = np.log(2) / MEDIAN_UNHOSPITALIZED_RECOVERY_TIME
 
     return dict(
         infection_rate=np.array(params_df["infection_rate"]),
@@ -214,10 +234,9 @@ def get_delphi_params(
         ihr_transition_rate=detection_rate * DETECTION_PROBABILITY * hospitalization_rate * (1 - mortality_rate),
         iqd_transition_rate=detection_rate * DETECTION_PROBABILITY * (1 - hospitalization_rate) * mortality_rate,
         iqr_transition_rate=detection_rate * DETECTION_PROBABILITY * (1 - hospitalization_rate) * (1 - mortality_rate),
-        iud_transition_rate=detection_rate * (1 - DETECTION_PROBABILITY) * hospitalization_rate,
-        iur_transition_rate=detection_rate * (1 - DETECTION_PROBABILITY) * (1 - hospitalization_rate),
-        hospitalized_death_rate=hospitalized_death_rate,
-        unhospitalized_death_rate=unhospitalized_death_rate,
+        iud_transition_rate=detection_rate * (1 - DETECTION_PROBABILITY) * mortality_rate,
+        iur_transition_rate=detection_rate * (1 - DETECTION_PROBABILITY) * (1 - mortality_rate),
+        death_rate=params_df["death_rate"].to_numpy(),
         hospitalized_recovery_rate=hospitalized_recovery_rate,
         unhospitalized_recovery_rate=unhospitalized_recovery_rate,
         mortality_rate=mortality_rate,

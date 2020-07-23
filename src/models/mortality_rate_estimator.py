@@ -16,11 +16,9 @@ class MortalityRateEstimator:
             population: np.ndarray,
             n_timesteps_per_estimate: int,
             max_pct_change: float,
-            max_pct_mortality_rate_deviation: float,
-            max_pct_cases_deviation: float,
+            min_mortality_rate: float,
             regularization_param: float,
-            use_l2_error: bool,
-            relax_cases_deviation_constraint: bool
+            enforce_monotonicity: bool = True
     ):
         # Set provided attributes
         self.baseline_mortality_rate = baseline_mortality_rate
@@ -29,11 +27,9 @@ class MortalityRateEstimator:
         self.population = population
         self.n_timesteps_per_estimate = n_timesteps_per_estimate
         self.max_pct_change = max_pct_change
-        self.max_pct_mortality_rate_deviation = max_pct_mortality_rate_deviation
-        self.max_pct_cases_deviation = max_pct_cases_deviation
+        self.min_mortality_rate = min_mortality_rate
         self.regularization_param = regularization_param
-        self.use_l2_error = use_l2_error
-        self.relax_cases_deviation_constraint = relax_cases_deviation_constraint
+        self.enforce_monotonicity = enforce_monotonicity
 
         # Set helper attributes
         self._n_risk_classes = baseline_mortality_rate.shape[0]
@@ -92,11 +88,11 @@ class MortalityRateEstimator:
         model = gp.Model()
 
         # Define decision variables
-        mortality_rate = model.addVars(self._n_risk_classes, self._n_estimation_periods, lb=0, ub=1)
+        mortality_rate = model.addVars(self._n_risk_classes, self._n_estimation_periods, lb=self.min_mortality_rate, ub=1)
         deaths = model.addVars(self._n_risk_classes, self._n_estimation_periods, lb=0)
         cases = model.addVars(self._n_risk_classes, self._n_estimation_periods, lb=0)
-        mortality_rate_deviation = model.addVars(self._n_risk_classes, self._n_estimation_periods, lb=0)
-        cases_deviation = model.addVars(self._n_risk_classes, self._n_estimation_periods, lb=0)
+        mortality_rate_error = model.addVars(self._n_risk_classes, self._n_estimation_periods, lb=0)
+        cases_error = model.addVars(self._n_risk_classes, self._n_estimation_periods, lb=0)
 
         # Set bi-linear constraints to define mortality rate
         model.addConstrs(
@@ -153,56 +149,51 @@ class MortalityRateEstimator:
 
         # Set constraints to roughly align cases with population subset size
         model.addConstrs(
-            cases_deviation[k, p] >= cases[k, p] - self._pop_proportions[k] * self._total_cases[p]
+            cases_error[k, p] >= cases[k, p] - self._pop_proportions[k] * self._total_cases[p]
             for k in self._risk_classes for p in self._estimation_periods
         )
         model.addConstrs(
-            cases_deviation[k, p] >= self._pop_proportions[k] * self._total_cases[p] - cases[k, p]
+            cases_error[k, p] >= self._pop_proportions[k] * self._total_cases[p] - cases[k, p]
             for k in self._risk_classes for p in self._estimation_periods
         )
-        if not self.relax_cases_deviation_constraint:
-            model.addConstrs(
-                (
-                    cases_deviation[k, p] <= self.max_pct_cases_deviation * self._pop_proportions[k] * self._total_cases[p]
-                    for k in self._risk_classes for p in self._estimation_periods
-                ),
-                name="Cases deviation upper bound"
-            )
 
-        # Set mortality rate error constraints
+        # Set mortality rate deviation constraints
         model.addConstrs(
             (
-                mortality_rate_deviation[k, p] >= mortality_rate[k, p] - self.baseline_mortality_rate[k]
+                mortality_rate_error[k, p] >= mortality_rate[k, p] - self.baseline_mortality_rate[k]
                 for k in self._risk_classes for p in self._estimation_periods
             ),
             name="Error lower bound 1"
         )
         model.addConstrs(
             (
-                mortality_rate_deviation[k, p] >= self.baseline_mortality_rate[k] - mortality_rate[k, p]
+                mortality_rate_error[k, p] >= self.baseline_mortality_rate[k] - mortality_rate[k, p]
                 for k in self._risk_classes for p in self._estimation_periods
             ),
             name="Error lower bound 2"
         )
-        model.addConstrs(
-            (
-                mortality_rate_deviation[k, p] <= self.max_pct_mortality_rate_deviation * self.baseline_mortality_rate[k]
-                for k in self._risk_classes for p in self._estimation_periods
-            ),
-            name="Error upper bound"
-        )
+
+        # Set monotonicity constraint
+        if self.enforce_monotonicity:
+            model.addConstrs(
+                (
+                    mortality_rate[k, p + 1] <= mortality_rate[k, p]
+                    for k in self._risk_classes for p in np.arange(self._n_estimation_periods - 1)
+                ),
+                name="Monotonicity constraint"
+            )
 
         # Set objective
-        if self.use_l2_error:
-            loss = gp.quicksum(
-                mortality_rate_deviation[k, p] * mortality_rate_deviation[k, p]
+        model.setObjective(
+            gp.quicksum(
+                mortality_rate_error[k, p] * mortality_rate_error[k, p] / (self.baseline_mortality_rate[k] ** 2)
                 for k in self._risk_classes for p in self._estimation_periods
-            )
-        else:
-            loss = mortality_rate_deviation.sum()
-        if self.relax_cases_deviation_constraint:
-            loss = loss + self.regularization_param * cases_deviation.sum()
-        model.setObjective(loss, GRB.MINIMIZE)
+            ) + self.regularization_param * gp.quicksum(
+                cases_error[k, p] / (self._pop_proportions[k] * self._total_cases[p])
+                for k in self._risk_classes for p in self._estimation_periods
+            ),
+            GRB.MINIMIZE
+        )
 
         # Set warm start
         mortality_rate_start, deaths_warm_start, cases_warm_start = self._get_warm_start()
@@ -224,12 +215,6 @@ class MortalityRateEstimator:
 
         # Solve model
         model.optimize()
-
-        # If infeasible, compute IIS for debugging
-        if model.status == GRB.INFEASIBLE:
-            model.computeIIS()
-            print(f"Violated constraints at indices: {[idx for idx, val in enumerate(model.IISCONSTR) if val == 1]}")
-            return
 
         # Return solution as arrays
         to_array = lambda x: np.array([[x[k, p] for p in self._estimation_periods] for k in self._risk_classes])

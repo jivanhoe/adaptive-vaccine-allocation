@@ -1,6 +1,8 @@
 import datetime as dt
-
+import pickle
 import pandas as pd
+
+from typing import NoReturn
 
 from data_utils.constants import *
 from data_utils.data_loading import load_and_clean_delphi_params, load_and_clean_delphi_predictions
@@ -44,4 +46,42 @@ def load_model(
         initial_conditions=initial_conditions,
         delphi_params=delphi_params,
         vaccine_params=vaccine_params
+    )
+
+
+def run(
+        start_date: dt.datetime,
+        end_date: dt.datetime,
+        model_path: str,
+        baseline_solution_path: str,
+        optimized_solution_path: str
+) -> NoReturn:
+
+    print("Loading model...")
+    model = load_model(
+        start_date=start_date,
+        end_date=end_date
+    )
+    with open(model_path, "wb") as fp:
+        pickle.dump(model, fp)
+
+    print("Running baseline...")
+    baseline_solution = model.simulate(prioritization_allocation=False)
+    with open(baseline_solution_path, "wb") as fp:
+        pickle.dump(baseline_solution, fp)
+
+    print("Optimizing...")
+    optimized_solution = model.optimize(log=True)
+    with open(optimized_solution_path, "wb") as fp:
+        pickle.dump(optimized_solution, fp)
+
+
+if __name__ == "__main__":
+
+    run(
+        start_date=dt.datetime(2020, 8, 7),
+        end_date=dt.datetime(2020, 10, 15),
+        model_path="../../data/outputs/model.pickle",
+        baseline_solution_path="../../data/outputs/baseline-solution.pickle",
+        optimized_solution_path="../../data/outputs/optimized-solution.pickle"
     )
