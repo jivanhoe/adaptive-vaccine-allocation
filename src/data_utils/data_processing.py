@@ -63,11 +63,7 @@ def get_baseline_mortality_rate_estimates(cdc_df: pd.DataFrame) -> np.ndarray:
 def get_lag_estimates(params_df: pd.DataFrame) -> List[dt.timedelta]:
     return [
         dt.timedelta(days=lag) for lag in np.ceil(
-            np.clip(
-                np.log(2) / params_df["death_rate"],
-                a_min=MEDIAN_PROGRESSION_TIME,
-                a_max=MEDIAN_PROGRESSION_TIME + MEDIAN_DETECTION_TIME + MEDIAN_UNHOSPITALIZED_RECOVERY_TIME
-            )
+            MEDIAN_PROGRESSION_TIME + MEDIAN_DETECTION_TIME + np.log(2) / params_df["death_rate"],
         )
     ]
 
@@ -119,7 +115,7 @@ def get_mortality_rate_estimates(
                 time_limit=TIME_LIMIT,
                 feasibility_tol=FEASIBILITY_TOL,
                 mip_gap=MIP_GAP,
-                output_flag=False,
+                output_flag=True,
             )[0]
             print(f"Completed calibration for {state}")
         except GurobiError:
@@ -130,7 +126,7 @@ def get_mortality_rate_estimates(
                     time_limit=TIME_LIMIT,
                     feasibility_tol=FEASIBILITY_TOL,
                     mip_gap=MIP_GAP,
-                    output_flag=False
+                    output_flag=True
                 )[0]
                 print(f"Completed calibration for {state}")
             except GurobiError:
@@ -195,7 +191,8 @@ def get_delphi_params(
         params_df: pd.DataFrame,
         predictions_df: pd.DataFrame,
         start_date: dt.datetime,
-        end_date: dt.datetime
+        end_date: dt.datetime,
+        mortality_rate_path: Optional[str],
 ) -> Dict[str, Union[float, np.ndarray]]:
 
     # Get policy response by state and timestep
@@ -206,14 +203,18 @@ def get_delphi_params(
     )
 
     # Get mortality rate estimates
-    mortality_rate = get_mortality_rate_estimates(
-        pop_df=pop_df,
-        cdc_df=cdc_df,
-        params_df=params_df,
-        predictions_df=predictions_df,
-        start_date=start_date,
-        end_date=end_date
-    )
+    if mortality_rate_path:
+        with open(mortality_rate_path, "rb") as fp:
+            mortality_rate = np.load(fp)
+    else:
+        mortality_rate = get_mortality_rate_estimates(
+            pop_df=pop_df,
+            cdc_df=cdc_df,
+            params_df=params_df,
+            predictions_df=predictions_df,
+            start_date=start_date,
+            end_date=end_date
+        )
 
     # Get estimated hospitalization rates from CDC data
     hospitalization_rate = get_hospitalization_rate_by_risk_class(cdc_df=cdc_df)

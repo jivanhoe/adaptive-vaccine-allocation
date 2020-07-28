@@ -7,8 +7,9 @@ def load_and_clean_delphi_params(path: str) -> pd.DataFrame:
 
     # Filter down to US only
     df = df[
-        df["Country"] == "US"
-        ].drop(["Continent", "Country", "MAPE"], axis=1)
+        (df["Country"] == "US")
+        & (df["Province"] != "None")
+    ].drop(["Continent", "Country", "MAPE"], axis=1)
 
     # Rename columns
     df.rename(
@@ -41,7 +42,10 @@ def load_and_clean_delphi_predictions(path: str) -> pd.DataFrame:
     df = pd.read_csv(path)
 
     # Filter down to US only
-    df = df[df["Country"] == "US"]
+    df = df[
+        (df["Country"] == "US")
+        & (df["Province"] != "None")
+    ]
 
     # Aggregate intermediary state
     df["recovering"] = df[["AR", "DHR", "DQR"]].sum(1)

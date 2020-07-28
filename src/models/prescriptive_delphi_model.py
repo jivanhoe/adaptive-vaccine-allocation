@@ -1,4 +1,5 @@
 from typing import Tuple, Union, Optional, Dict
+from copy import deepcopy
 
 import gurobipy as gp
 import numpy as np
@@ -21,6 +22,7 @@ class DELPHISolution:
             undetected_recovering: np.ndarray,
             deceased: np.ndarray,
             recovered: np.ndarray,
+            eligible: np.ndarray,
             vaccinated: np.ndarray,
             capacity: Optional[np.ndarray] = None,
             days_per_timestep: float = 1.0
@@ -49,7 +51,9 @@ class DELPHISolution:
         :param recovered: a numpy array of shape (n_regions, n_risk_classes, n_timesteps + 1) that represents the
         recovered population by region and risk class at each timestep
         :param deceased: a numpy array of shape (n_regions, n_risk_classes, n_timesteps + 1) that represents the
-         deceased population by region and risk class at each timestep
+        deceased population by region and risk class at each timestep
+        :param eligible: a numpy array of shape (n_regions, n_risk_classes, n_timesteps + 1) that represents the
+        population eligible for vaccination by region and risk class at each timestep
         :param vaccinated: a numpy array of shape (n_regions, n_risk_classes, n_timesteps + 1) that represents the
         number vaccines allocated by region and risk class at each timestep
         :param capacity: a numpy array of shape (n_regions,) that represents the allocation capacity of each region
@@ -73,6 +77,7 @@ class DELPHISolution:
         self.undetected = undetected_dying + undetected_recovering
         self.deceased = deceased
         self.recovered = recovered
+        self.eligible = eligible
         self.vaccinated = vaccinated
         self.capacity = capacity
         self.days_per_timestep = days_per_timestep
@@ -187,6 +192,7 @@ class PrescriptiveDELPHIModel:
         undetected_recovering = np.zeros(dims)
         deceased = np.zeros(dims)
         recovered = np.zeros(dims)
+        eligible = np.zeros(dims)
 
         # Initialize control variable if none provided
         allocate_vaccines = vaccinated is None
@@ -204,16 +210,21 @@ class PrescriptiveDELPHIModel:
         undetected_dying[:, :, 0] = self.initial_undetected_dying
         undetected_recovering[:, :, 0] = self.initial_undetected_recovering
         recovered[:, :, 0] = self.initial_recovered
+        eligible[:, :, 0] = self.initial_susceptible
+
+        # Rank risk classes by mortality rate
+        priority_ranking = np.argsort(-self.mortality_rate.mean(axis=(0, 2)))
 
         # Propagate discrete DELPHI dynamics with vaccine allocation heuristic
         for t in self._timesteps:
 
             # Get eligible population subsets for vaccination
-            eligible = susceptible[:, self._included_risk_classes, t] \
+            eligible[:, self._included_risk_classes, t] = susceptible[:, self._included_risk_classes, t] \
                        - (1 - self.vaccine_effectiveness) * vaccinated[:, self._included_risk_classes, :t].sum(axis=2)
             eligible = np.maximum(eligible, 0)
-            total_eligible = eligible.sum()
-            if total_eligible > 0 and allocate_vaccines:
+
+            # Allocate vaccines if required
+            if eligible.sum() and allocate_vaccines:
 
                 # If random allocation specified, generate feasible allocation
                 if randomize_allocation:
@@ -232,13 +243,10 @@ class PrescriptiveDELPHIModel:
                 # Else use baseline policy that orders region-wise allocation by risk class
                 else:
                     if prioritization_allocation:
-                        regional_budget = eligible.sum(axis=1) / total_eligible * self.vaccine_budget[t]
-                        for k in np.argsort(-self.ihd_transition_rate):
+                        regional_budget = eligible[:, :, t].sum(axis=1) / eligible[:, :, t].sum() * self.vaccine_budget[t]
+                        for k in priority_ranking:
                             if k in self._included_risk_classes:
-                                vaccinated[:, k, t] = np.minimum(
-                                    regional_budget,
-                                    eligible[:, self._included_risk_classes == k][0][0]
-                                )
+                                vaccinated[:, k, t] = np.minimum(regional_budget, eligible[:, k, t])
                                 regional_budget -= vaccinated[:, k, t]
                                 if regional_budget.sum() == 0:
                                     break
@@ -247,6 +255,10 @@ class PrescriptiveDELPHIModel:
                         for k in self._included_risk_classes:
                             vaccinated[:, k, t] = regional_budget * self.population[:, k] / \
                                                   self.population[:, self._included_risk_classes].sum()
+
+            # Else ensure that the allocated vaccines do not exceed the eligible population
+            else:
+                vaccinated[:, :, t] = np.minimum(vaccinated[:, :, t], eligible[:, :, t])
 
             # Apply Euler forward difference scheme with clipping of negative values
             for j in self._regions:
@@ -327,6 +339,7 @@ class PrescriptiveDELPHIModel:
             undetected_recovering=undetected_recovering,
             recovered=recovered,
             deceased=deceased,
+            eligible=eligible,
             vaccinated=vaccinated,
             days_per_timestep=self.days_per_timestep,
         )
@@ -334,8 +347,7 @@ class PrescriptiveDELPHIModel:
     def _optimize_relaxation(
             self,
             estimated_infectious: np.ndarray,
-            exploration_rel_tol: float,
-            exploration_abs_tol: float,
+            exploration_tol: float,
             mip_gap: Optional[float],
             feasibility_tol: Optional[float],
             time_limit: Optional[float],
@@ -348,9 +360,7 @@ class PrescriptiveDELPHIModel:
         :param estimated_infectious: numpy array of size (n_regions, k_classes, t_timesteps + 1) represents the
         estimated infectious population by region and risk class at each timestep, based on a previous feasible
         solution
-        :param exploration_rel_tol: a float in [0, 1] that specifies maximum allowed relative error between the
-        estimated  and actual infectious population in any region
-        :param exploration_abs_tol: a positive float that specifies maximum allowed absolute error between the
+        :param exploration_tol: a positive float that specifies maximum allowed absolute error between the
         estimated and actual infectious population in any region
         :param mip_gap: an optional float that if set overrides Gurobi's default maximum MIP gap required for
         termination (default None)
@@ -414,19 +424,25 @@ class PrescriptiveDELPHIModel:
             for j in self._regions for k in self._risk_classes
         )
 
+        # Set terminal conditions
+        model.addConstrs(
+            vaccinated[j, k, self._n_timesteps] == 0
+            for j in self._regions for k in self._risk_classes
+        )
+
         # Set DELPHI dynamics constraints
         model.addConstrs(
             susceptible[j, k, t + 1] - susceptible[j, k, t] + self.vaccine_effectiveness * vaccinated[j, k, t] >=
             - self.infection_rate[j] * self.policy_response[j, t] / self.population[j, :].sum()
             * (susceptible[j, k, t] - self.vaccine_effectiveness * vaccinated[j, k, t])
-            * (1 - exploration_rel_tol) * estimated_infectious[j, t] * self.days_per_timestep
+            * estimated_infectious[j, t] * self.days_per_timestep
             for j in self._regions for k in self._risk_classes for t in self._timesteps
         )
         model.addConstrs(
             exposed[j, k, t + 1] - exposed[j, k, t] >= (
                     self.infection_rate[j] * self.policy_response[j, t] / self.population[j, :].sum()
                     * (susceptible[j, k, t] - self.vaccine_effectiveness * vaccinated[j, k, t])
-                    * (1 + exploration_rel_tol) * estimated_infectious[j, t]
+                    * estimated_infectious[j, t]
                     - self.progression_rate * exposed[j, k, t]
             ) * self.days_per_timestep
             for j in self._regions for k in self._risk_classes for t in self._timesteps
@@ -468,7 +484,7 @@ class PrescriptiveDELPHIModel:
 
         # Set bounding constraint on absolute error of estimated infectious
         model.addConstrs(
-            infectious_error[j, t] <= max(exploration_rel_tol * estimated_infectious[j, t], exploration_abs_tol)
+            infectious_error[j, t] <= exploration_tol
             for j in self._regions for t in self._timesteps
         )
         model.addConstrs(
@@ -476,7 +492,7 @@ class PrescriptiveDELPHIModel:
             for j in self._regions for t in self._timesteps
         )
         model.addConstrs(
-            infectious_error[j, t] >= - estimated_infectious[j, t] + infectious.sum(j, "*", t)
+            infectious_error[j, t] >= infectious.sum(j, "*", t) - estimated_infectious[j, t]
             for j in self._regions for t in self._timesteps
         )
 
@@ -503,12 +519,14 @@ class PrescriptiveDELPHIModel:
             for j in self._regions for t in self._timesteps
         )
         model.addConstrs(
-            vaccinated.sum(j, "*", u) >= (1 - self.max_decrease_pct) * vaccinated.sum(j, "*", t)
-            for j in self._regions for t, u in zip(self._timesteps[:-1], self._timesteps[1:])
+            vaccinated.sum(j, "*", t + 1) >= vaccinated.sum(j, "*", t)
+            - self.max_allocation_pct * self.population[j, :].sum() * self.max_increase_pct
+            for j in self._regions for t in self._timesteps[:-1]
         )
         model.addConstrs(
-            vaccinated.sum(j, "*", u) <= (1 + self.max_increase_pct) * vaccinated.sum(j, "*", t)
-            for j in self._regions for t, u in zip(self._timesteps[:-1], self._timesteps[1:])
+            vaccinated.sum(j, "*", t + 1) <= vaccinated.sum(j, "*", t)
+            + self.max_allocation_pct * self.population[j, :].sum() * self.max_decrease_pct
+            for j in self._regions for t in self._timesteps[:-1]
         )
         if self.optimize_capacity:
             model.addConstrs(
@@ -580,40 +598,112 @@ class PrescriptiveDELPHIModel:
     def _smooth_vaccine_allocation(
             self,
             solution: DELPHISolution,
-            smoothing_window: int,
-            rounding_tol: float,
-    ) -> np.ndarray:
+            smoothing_window: int
+    ) -> DELPHISolution:
         """
         Apply a rolling-window smoothing heuristic to the vaccine allocation policy as a post-processing step.
 
         :param solution: a DELPHISolution object
         :param smoothing_window: an integer that specifies the symmetric smoothing window size (default)
-        :param rounding_tol: an integer the specifies the maximum allocation amount that will be rounded to 0 in
+        :return: a numpy array of size (n_regions, n_risk_classes, n_timesteps + 1) representing the smoothed vaccine
+        allocation policy
+        """
+        vaccinated = np.zeros(solution.vaccinated.shape)
+        for t in self._timesteps:
+            start = max(t - smoothing_window, 0)
+            end = min(t + smoothing_window, self._n_timesteps) + 1
+            vaccinated[:, :, t] = solution.vaccinated[:, :, start:end].mean(axis=2)
+            vaccinated[:, :, t] = vaccinated[:, :, t] * self.vaccine_budget[t] / vaccinated[:, :, t].sum()
+        return self.simulate(vaccinated=vaccinated)
+
+    def _prioritize_vaccine_allocation(self, solution: DELPHISolution) -> DELPHISolution:
+        """
+        Adjust vaccine allocation to ensure risk class prioritization is preserved.
+
+        :param solution: a DELPHISolution object
+        :return: a DELPHISolution object
+        """
+
+        # Rank risk classes by mortality rate
+        priority_ranking = np.argsort(-self.mortality_rate.mean(axis=(0, 2)))
+
+        for t in self._timesteps:
+
+            # Initialize variables for timestep
+            eligible = solution.eligible
+            vaccinated = solution.vaccinated
+            update = False
+
+            # Perform vaccine transfers to prioritize by risk class
+            for i, k in enumerate(priority_ranking):
+                for l in priority_ranking[i + 1:]:
+                    if k in self._included_risk_classes and l in self._included_risk_classes:
+                        transfer = np.minimum(vaccinated[:, l, t], eligible[:, k, t] - vaccinated[:, k, t])
+                        if transfer.max() > 0:
+                            vaccinated[:, k, t] = vaccinated[:, k, t] + transfer
+                            vaccinated[:, l, t] = vaccinated[:, l, t] - transfer
+                            update = True
+
+            # If a transfer was
+            if update:
+                solution = self.simulate(vaccinated=vaccinated)
+
+        return solution
+
+    def _round_vaccine_allocation(self,  solution: DELPHISolution, rounding_tol: float):
+        """
+        Apply a rounding cut-off to the vaccine allocation policy as a proxy for transforming the interior point
+        solution into a basic feasible solution.
+
+        :param solution: a DELPHISolution object
+        :param rounding_tol: a float the specifies the maximum allocation amount that will be rounded to 0 in
+        post-processing (default 1e-3)
+        :return: a DELPHISolution object
+        """
+        vaccinated = np.where(solution.vaccinated > rounding_tol, solution.vaccinated, 0)
+        for t in self._timesteps:
+            vaccinated[:, :, t] = vaccinated[:, :, t] * self.vaccine_budget[t] / vaccinated[:, :, t].sum()
+        return self.simulate(vaccinated=vaccinated)
+
+    def _post_process_solution(
+            self,
+            solution: DELPHISolution,
+            prioritize_allocation: bool,
+            smooth_allocation: bool,
+            round_allocation: bool,
+            smoothing_window: int,
+            rounding_tol: float
+    ):
+        """
+
+        :param solution: a DELPHISolution object
+        :param smoothing_window: an integer that specifies the symmetric smoothing window size (default)
+        :param rounding_tol: a float the specifies the maximum allocation amount that will be rounded to 0 in
         post-processing (default 1e-3)
         :return: a numpy array of size (n_regions, n_risk_classes, n_timesteps + 1) representing the smoothed vaccine
         allocation policy
         """
-        vaccinated = np.where(solution.vaccinated > rounding_tol, solution.vaccinated, 0)
-        for t in self._timesteps:
-            start = max(t - smoothing_window, 0)
-            end = min(t + smoothing_window, self._n_timesteps)
-            vaccinated[:, :, t] = vaccinated[:, :, start:end].mean(axis=2)
-            vaccinated[:, :, t] = vaccinated[:, :, t] * self.vaccine_budget[t] / vaccinated[:, :, t].sum()
-        return vaccinated
+        if smooth_allocation:
+            solution = self._smooth_vaccine_allocation(solution=solution, smoothing_window=smoothing_window)
+        if prioritize_allocation:
+            solution = self._prioritize_vaccine_allocation(solution=solution)
+        if round_allocation:
+            solution = self._round_vaccine_allocation(solution=solution, rounding_tol=rounding_tol)
+        return solution
 
     def optimize(
             self,
-            exploration_rel_tol: float = 0.0,
-            exploration_abs_tol: float = 1.0,
+            exploration_tol: float,
             termination_tol: float = 1e-2,
             mip_gap: Optional[float] = None,
             feasibility_tol: Optional[float] = None,
             time_limit: Optional[float] = None,
-            disable_crossover: bool = False,
+            disable_crossover: bool = True,
             output_flag: bool = False,
             n_restarts: int = 1,
             max_iterations: int = 10,
-            apply_smoothing: bool = True,
+            smooth_allocation: bool = False,
+            prioritize_allocation: bool = False,
             smoothing_window: int = 1,
             rounding_tol: float = 1e-2,
             log: bool = False,
@@ -622,10 +712,8 @@ class PrescriptiveDELPHIModel:
         """
         Solve the prescriptive DELPHI model for vaccine allocation using a coordinate descent heuristic.
 
-        :param exploration_rel_tol: a float in [0, 1] that specifies maximum allowed relative error between the
-        estimated  and actual infectious population in any region (default 0)
-        :param exploration_abs_tol: a float  that specifies maximum allowed absolute error between the
-        estimated and actual infectious population in any region (default 1)
+        :param exploration_tol: a float  that specifies maximum allowed absolute error between the
+        estimated and actual infectious population in any region
         :param termination_tol: a positive float that specifies maximum allowed absolute error between the
         estimated and actual infectious population in any region (default 1e-3)
         :param mip_gap: an optional float that if set overrides Gurobi's default maximum MIP gap required for
@@ -639,10 +727,11 @@ class PrescriptiveDELPHIModel:
         :param n_restarts: an integer that specifies the number of restarts, with a smart start provided if set to 1
         else randomized starts provided (default 1)
         :param max_iterations: an integer that specifies the maximum number of descent iterations per trial (default 10)
-        :param apply_smoothing: a boolean that if true applies an additional smoothing heuristic to the solution in
+        :param smooth_allocation: a boolean that if true applies an additional smoothing heuristic to the solution in
         post-processing(default True)
+        :param prioritize_allocation: a boolean
         :param smoothing_window: an integer that specifies the symmetric smoothing window size (default)
-        :param rounding_tol: an integer the specifies the maximum allocation amount that will be rounded to 0 in
+        :param rounding_tol: a float the specifies the maximum allocation amount that will be rounded to 0 in
         post-processing (default 1e-3)
         :param log: a boolean that specifies whether to log progress
         :param seed: an integer that is used to set the numpy seed
@@ -661,7 +750,7 @@ class PrescriptiveDELPHIModel:
             trajectory = []
             incumbent_solution = self.simulate(
                 randomize_allocation=n_restarts > 1,
-                prioritization_allocation=True
+                prioritization_allocation=prioritize_allocation
             )
             incumbent_obj_val = incumbent_solution.get_objective_value()
 
@@ -678,8 +767,7 @@ class PrescriptiveDELPHIModel:
                 try:
                     vaccinated, capacity = self._optimize_relaxation(
                         estimated_infectious=incumbent_solution.infectious.sum(axis=1),
-                        exploration_rel_tol=exploration_rel_tol,
-                        exploration_abs_tol=exploration_abs_tol,
+                        exploration_tol=exploration_tol,
                         mip_gap=mip_gap,
                         feasibility_tol=feasibility_tol,
                         time_limit=time_limit,
@@ -717,15 +805,17 @@ class PrescriptiveDELPHIModel:
                 best_obj_val = incumbent_obj_val
                 best_solution = incumbent_solution
 
-        if apply_smoothing:
-            if log:
-                print("Smoothing vaccine allocation policy")
-            vaccinated = self._smooth_vaccine_allocation(
-                solution=best_solution,
-                smoothing_window=smoothing_window,
-                rounding_tol=rounding_tol
-            )
-            best_solution = self.simulate(vaccinated=vaccinated)
-            if log:
-                print(f"Objective value after post-processing: {'{0:.2f}'.format(best_solution.get_objective_value())}")
+        # Apply post-processing steps to solution
+        if log:
+            print("Post-processing solution")
+        best_solution = self._post_process_solution(
+            solution=best_solution,
+            smooth_allocation=smooth_allocation,
+            prioritize_allocation=prioritize_allocation,
+            round_allocation=disable_crossover,
+            smoothing_window=smoothing_window,
+            rounding_tol=rounding_tol
+        )
+        if log:
+            print(f"Objective value after post-processing: {'{0:.2f}'.format(best_solution.get_objective_value())}")
         return best_solution

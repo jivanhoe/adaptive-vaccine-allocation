@@ -2,7 +2,7 @@ import numpy as np
 
 # Paths
 DELPHI_PARAMS_PATH = "../../data/inputs/delphi-parameters.csv"
-DELPHI_PREDICTIONS_PATH = "../../data/inputs/delphi-predictions.csv"
+DELPHI_PREDICTIONS_PATH = "../../data/inputs/delphi-predictions-all.csv"
 CDC_DATA_PATH = "../../data/inputs/cdc-data.csv"
 POPULATION_DATA_PATH = "../../data/inputs/us-population.csv"
 
@@ -22,15 +22,14 @@ N_RISK_CLASSES = len(RISK_CLASSES)
 DAYS_PER_TIMESTEP = 1.0
 
 # Mortality rate estimation parameters
-N_TIMESTEPS_PER_ESTIMATE = 5
+N_TIMESTEPS_PER_ESTIMATE = 10
 MAX_PCT_CHANGE = 0.2
-MIN_MORTALITY_RATE = 5e-4
-MAX_MORTALITY_RATE = 0.5
-REGULARIZATION_PARAM = 1e-3  # Only used if cases deviation constraint is relaxed
-USE_L2_ERROR = True
-TIME_LIMIT = 60
+MIN_MORTALITY_RATE = 0
+MAX_MORTALITY_RATE = 0.2
+REGULARIZATION_PARAM = 0.1
+TIME_LIMIT = 30
 FEASIBILITY_TOL = 1e-3
-MIP_GAP = 1e-2
+MIP_GAP = 5e-2
 
 # Fixed DELPHI parameters
 DETECTION_PROBABILITY = 0.2
@@ -41,9 +40,9 @@ MEDIAN_UNHOSPITALIZED_RECOVERY_TIME = 15.0
 
 # Vaccine parameters
 VACCINE_EFFECTIVENESS = 0.6
-VACCINE_BUDGET_PCT = 5e-4
+VACCINE_BUDGET_PCT = 1e-3
 MAX_ALLOCATION_PCT = 5e-3
-MIN_ALLOCATION_PCT = 5e-5
+MIN_ALLOCATION_PCT = 0
 MAX_DECREASE = 0.1
 MAX_INCREASE = 0.1
 MAX_TOTAL_CAPACITY_PCT = None
