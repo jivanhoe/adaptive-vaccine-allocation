@@ -5,7 +5,7 @@ from gurobipy import GurobiError
 
 import pandas as pd
 
-from data_utils.constants import *
+from pipeline.constants import *
 from models.mortality_rate_estimator import MortalityRateEstimator
 
 
@@ -49,23 +49,37 @@ def get_policy_response_by_state_and_timestep(
     return policy_response
 
 
-def get_baseline_mortality_rate_estimates(cdc_df: pd.DataFrame) -> np.ndarray:
+def get_baseline_mortality_rate_estimates(
+        cdc_df: pd.DataFrame,
+        predictions_df: pd.DataFrame,
+        start_date: dt.datetime,
+        end_date: dt.datetime,
+) -> np.ndarray:
+
+    # Compute rescaling factor
+    predicted_cases, predicted_deaths = predictions_df[
+        (predictions_df["date"] >= start_date)
+        & (predictions_df["date"] <= end_date)
+    ][["total_detected_cases", "total_detected_deaths"]].max()
+    cdc_mortality_rate = (cdc_df["deaths"].sum() / cdc_df["cases"].sum())
+    delphi_mortality_rate = predicted_deaths / predicted_cases
+    rescaling_factor = delphi_mortality_rate / cdc_mortality_rate if RESCALE_BASELINE else 1.0
+
+    # Compute baseline mortality rates
     baseline_mortality_rate = np.zeros(N_RISK_CLASSES)
     for k, risk_class in enumerate(RISK_CLASSES):
         cases, deaths = cdc_df[
             (cdc_df["min_age"] >= risk_class["min_age"])
             & (cdc_df["max_age"] <= risk_class["max_age"])
         ][["cases", "deaths"]].sum()
-        baseline_mortality_rate[k] = deaths / cases
+        baseline_mortality_rate[k] = deaths / cases * rescaling_factor
     return baseline_mortality_rate
 
 
 def get_lag_estimates(params_df: pd.DataFrame) -> List[dt.timedelta]:
-    return [
-        dt.timedelta(days=lag) for lag in np.ceil(
-            MEDIAN_PROGRESSION_TIME + MEDIAN_DETECTION_TIME + np.log(2) / params_df["death_rate"],
-        )
-    ]
+    lags = np.ceil(MEDIAN_PROGRESSION_TIME + MEDIAN_DETECTION_TIME + (np.log(2) / params_df["death_rate"]))
+    lags = np.clip(lags, a_min=MIN_LAG, a_max=MAX_LAG)
+    return [dt.timedelta(days=lag) for lag in lags]
 
 
 def get_mortality_rate_estimates(
@@ -79,7 +93,12 @@ def get_mortality_rate_estimates(
 
     # Get data
     population = get_population_by_state_and_risk_class(pop_df=pop_df)
-    baseline_mortality_rate = get_baseline_mortality_rate_estimates(cdc_df=cdc_df)
+    baseline_mortality_rate = get_baseline_mortality_rate_estimates(
+        cdc_df=cdc_df,
+        predictions_df=predictions_df,
+        start_date=start_date,
+        end_date=end_date
+    )
     lag = get_lag_estimates(params_df=params_df)
 
     # Initialize grid
@@ -100,8 +119,8 @@ def get_mortality_rate_estimates(
         ]["total_detected_deaths"].diff().dropna().to_numpy()
         deaths = np.where(deaths / cases <= MAX_MORTALITY_RATE, deaths, MAX_MORTALITY_RATE * cases)
         mortality_rate_estimator = MortalityRateEstimator(
-            cases=cases,
-            deaths=deaths,
+            cases=np.repeat(cases, 1 / DAYS_PER_TIMESTEP) * DAYS_PER_TIMESTEP,
+            deaths=np.repeat(deaths, 1 / DAYS_PER_TIMESTEP) * DAYS_PER_TIMESTEP,
             baseline_mortality_rate=baseline_mortality_rate,
             population=population[j, :],
             n_timesteps_per_estimate=N_TIMESTEPS_PER_ESTIMATE,
@@ -237,28 +256,10 @@ def get_delphi_params(
         iqr_transition_rate=detection_rate * DETECTION_PROBABILITY * (1 - hospitalization_rate) * (1 - mortality_rate),
         iud_transition_rate=detection_rate * (1 - DETECTION_PROBABILITY) * mortality_rate,
         iur_transition_rate=detection_rate * (1 - DETECTION_PROBABILITY) * (1 - mortality_rate),
-        death_rate=params_df["death_rate"].to_numpy(),
+        death_rate=np.log(2) / np.maximum(params_df["death_rate"].to_numpy(), MIN_LAG),
         hospitalized_recovery_rate=hospitalized_recovery_rate,
         unhospitalized_recovery_rate=unhospitalized_recovery_rate,
         mortality_rate=mortality_rate,
         days_per_timestep=DAYS_PER_TIMESTEP
     )
 
-
-def get_vaccine_params(
-        total_pop: float,
-        start_date: dt.datetime,
-        end_date: dt.datetime,
-) -> Dict[str, Union[float, np.ndarray]]:
-    n_timesteps = calculate_n_timesteps(start_date=start_date, end_date=end_date)
-    return dict(
-        vaccine_effectiveness=VACCINE_EFFECTIVENESS,
-        vaccine_budget=np.array([total_pop * VACCINE_BUDGET_PCT for _ in range(n_timesteps)]),
-        max_total_capacity=(MAX_TOTAL_CAPACITY_PCT if MAX_TOTAL_CAPACITY_PCT else VACCINE_BUDGET_PCT) * total_pop,
-        max_allocation_pct=MAX_ALLOCATION_PCT,
-        min_allocation_pct=MIN_ALLOCATION_PCT,
-        max_decrease_pct=MAX_DECREASE,
-        max_increase_pct=MAX_INCREASE,
-        optimize_capacity=OPTIMIZE_CAPACITY,
-        excluded_risk_classes=np.array(EXCLUDED_RISK_CLASSES) if EXCLUDED_RISK_CLASSES else np.array([]).astype(int),
-    )

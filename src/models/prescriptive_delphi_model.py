@@ -1,5 +1,4 @@
 from typing import Tuple, Union, Optional, Dict
-from copy import deepcopy
 
 import gurobipy as gp
 import numpy as np
@@ -161,6 +160,10 @@ class PrescriptiveDELPHIModel:
         self._included_risk_classes = np.array([k for k in self._risk_classes if k not in self.excluded_risk_classes])
         self._timesteps = np.arange(self._n_timesteps)
 
+        # Storage attributes
+        self._trajectories = []
+        self._solutions = []
+
     def simulate(
             self,
             vaccinated: Optional[np.ndarray] = None,
@@ -251,14 +254,12 @@ class PrescriptiveDELPHIModel:
                                 if regional_budget.sum() == 0:
                                     break
                     else:
-                        regional_budget = self.population.sum(axis=1) / self.population.sum()
                         for k in self._included_risk_classes:
-                            vaccinated[:, k, t] = regional_budget * self.population[:, k] / \
+                            vaccinated[:, k, t] = self.vaccine_budget[t] * self.population[:, k] / \
                                                   self.population[:, self._included_risk_classes].sum()
 
             # Else ensure that the allocated vaccines do not exceed the eligible population
-            else:
-                vaccinated[:, :, t] = np.minimum(vaccinated[:, :, t], eligible[:, :, t])
+            vaccinated[:, :, t] = np.minimum(vaccinated[:, :, t], eligible[:, :, t])
 
             # Apply Euler forward difference scheme with clipping of negative values
             for j in self._regions:
@@ -346,9 +347,11 @@ class PrescriptiveDELPHIModel:
 
     def _optimize_relaxation(
             self,
-            estimated_infectious: np.ndarray,
             exploration_tol: float,
+            estimated_infectious: np.ndarray,
+            vaccinated_warm_start: Optional[np.ndarray],
             mip_gap: Optional[float],
+            barrier_conv_tol: Optional[float],
             feasibility_tol: Optional[float],
             time_limit: Optional[float],
             disable_crossover: bool,
@@ -357,19 +360,23 @@ class PrescriptiveDELPHIModel:
         """
         Solve a linear relaxation of the vaccine allocation problem, based on estimated infectious populations.
 
-        :param estimated_infectious: numpy array of size (n_regions, k_classes, t_timesteps + 1) represents the
-        estimated infectious population by region and risk class at each timestep, based on a previous feasible
-        solution
         :param exploration_tol: a positive float that specifies maximum allowed absolute error between the
         estimated and actual infectious population in any region
+        :param estimated_infectious: numpy array of size (n_regions, k_classes, t_timesteps + 1) that represents the
+        estimated infectious population by region and risk class at each timestep, based on a previous feasible
+        solution
+        :param vaccinated_warm_start: an optional numpy array of size (n_regions, k_classes, t_timesteps + 1) that
+        represents the initial guess for the optimal vaccine allocation policy
         :param mip_gap: an optional float that if set overrides Gurobi's default maximum MIP gap required for
-        termination (default None)
+        termination
+        :param barrier_conv_tol: an optional float that if set overrides Gurobi's default convergence tolerance for the
+        barrier method
         :param feasibility_tol: an optional float that if set overrides Gurobi's default maximum feasibility tolerance
-        for constraints (default None)
-        :param time_limit: an optional float that if set specifies the maximum solve time in seconds (default None)
+        for constraints
+        :param time_limit: an optional float that if set specifies the maximum solve time in seconds
         :param disable_crossover: a  boolean that if true disables Gurobi's crossover algorithm, which used to clean up
-        the interior solution of the barrier method into a basic feasible solution (default False)
-        :param output_flag: a boolean that specifies whether to show the solver logs (default False)
+        the interior solution of the barrier method into a basic feasible solution
+        :param output_flag: a boolean that specifies whether to show the solver logs
         :return: a tuple of two numpy arrays of size (n_regions, n_risk_classes, t_timesteps + 1) and (n_regions,) that
         respectively represent the vaccine allocation policy and the regional allocation capacities
         allocations
@@ -568,9 +575,18 @@ class PrescriptiveDELPHIModel:
             GRB.MINIMIZE
         )
 
+        # Set warm start
+        if vaccinated_warm_start is not None:
+            for j in self._regions:
+                for k in self._included_risk_classes:
+                    for t in self._timesteps:
+                        vaccinated[j, k, t].start = vaccinated_warm_start[j, k, t]
+
         # Set solver params
         if mip_gap:
             model.params.MIPGap = mip_gap
+        if barrier_conv_tol:
+            model.params.BarConvTol = barrier_conv_tol
         if feasibility_tol:
             model.params.FeasibilityTol = feasibility_tol
         if time_limit:
@@ -696,12 +712,14 @@ class PrescriptiveDELPHIModel:
             exploration_tol: float,
             termination_tol: float = 1e-2,
             mip_gap: Optional[float] = None,
+            barrier_conv_tol: Optional[float] = None,
             feasibility_tol: Optional[float] = None,
             time_limit: Optional[float] = None,
             disable_crossover: bool = True,
             output_flag: bool = False,
             n_restarts: int = 1,
             max_iterations: int = 10,
+            n_early_stopping_iterations: int = 2,
             smooth_allocation: bool = False,
             prioritize_allocation: bool = False,
             smoothing_window: int = 1,
@@ -718,6 +736,8 @@ class PrescriptiveDELPHIModel:
         estimated and actual infectious population in any region (default 1e-3)
         :param mip_gap: an optional float that if set overrides Gurobi's default maximum MIP gap required for
         termination (default None)
+        :param barrier_conv_tol: an optional float that if set overrides Gurobi's default convergence tolerance for the
+        barrier method (default None)
         :param feasibility_tol: an optional float that if set overrides Gurobi's default maximum feasibility tolerance
         for constraints (default None)
         :param time_limit: an optional float that if set specifies the maximum solve time in seconds (default None)
@@ -727,6 +747,8 @@ class PrescriptiveDELPHIModel:
         :param n_restarts: an integer that specifies the number of restarts, with a smart start provided if set to 1
         else randomized starts provided (default 1)
         :param max_iterations: an integer that specifies the maximum number of descent iterations per trial (default 10)
+        :param n_early_stopping_iterations: an integer that specifies the number of descent iterations after which a
+        trial is terminated if there is no improvement (default 2)
         :param smooth_allocation: a boolean that if true applies an additional smoothing heuristic to the solution in
         post-processing(default True)
         :param prioritize_allocation: a boolean
@@ -740,19 +762,21 @@ class PrescriptiveDELPHIModel:
 
         # Initialize algorithm
         np.random.seed(seed)
-        trajectories = []
         best_solution = None
         best_obj_val = np.inf
 
         for restart in range(n_restarts):
 
-            # Initialize a feasible solution
-            trajectory = []
+            # Initialize restart
             incumbent_solution = self.simulate(
                 randomize_allocation=n_restarts > 1,
-                prioritization_allocation=prioritize_allocation
+                prioritization_allocation=True
             )
             incumbent_obj_val = incumbent_solution.get_objective_value()
+            trajectory = [incumbent_obj_val]
+            best_solution_for_restart = None
+            best_obj_val_for_restart = np.inf
+            n_iters_since_improvement = 0
 
             if log:
                 print(f"Restart: {restart + 1}/{n_restarts}")
@@ -760,15 +784,14 @@ class PrescriptiveDELPHIModel:
 
             for i in range(max_iterations):
 
-                # Store incumbent objective in trajectory
-                trajectory.append(incumbent_obj_val)
-
                 # Re-optimize vaccine allocation by solution linearized relaxation
                 try:
                     vaccinated, capacity = self._optimize_relaxation(
-                        estimated_infectious=incumbent_solution.infectious.sum(axis=1),
                         exploration_tol=exploration_tol,
+                        estimated_infectious=incumbent_solution.infectious.sum(axis=1),
+                        vaccinated_warm_start=incumbent_solution.vaccinated,
                         mip_gap=mip_gap,
+                        barrier_conv_tol=barrier_conv_tol,
                         feasibility_tol=feasibility_tol,
                         time_limit=time_limit,
                         disable_crossover=disable_crossover,
@@ -779,14 +802,34 @@ class PrescriptiveDELPHIModel:
                         print("Infeasible relaxation - terminating search")
                     break
 
-                # Update incumbent solution
+                # Update incumbent and previous solution
                 previous_solution, incumbent_solution = incumbent_solution, self.simulate(vaccinated=vaccinated)
                 previous_obj_val, incumbent_obj_val = incumbent_obj_val, incumbent_solution.get_objective_value()
                 incumbent_solution.capacity = capacity
+                trajectory.append(incumbent_obj_val)
                 if log:
                     print(f"Iteration: {i + 1}/{max_iterations} \t Objective value: {'{0:.2f}'.format(incumbent_obj_val)}")
 
-                # Terminate if solution convergences
+                # Update best solution if incumbent solution is an improvement
+                if incumbent_obj_val < best_obj_val:
+                    best_obj_val = incumbent_obj_val
+                    best_solution = incumbent_solution
+
+                # Update incumbent solution for restart if incumbent solution is an improvement
+                if incumbent_obj_val < best_obj_val_for_restart:
+                    best_obj_val_for_restart = incumbent_obj_val
+                    best_solution_for_restart = best_solution_for_restart
+                    n_iters_since_improvement = 0
+                else:
+                    n_iters_since_improvement += 1
+
+                # Terminate coordinate descent for restart if solution convergences
+                if n_iters_since_improvement >= n_early_stopping_iterations:
+                    if log:
+                        print(f"No improvement found in {n_early_stopping_iterations} iterations - terminating search for trial")
+                    break
+
+                # Terminate coordinate descent for restart if solution convergences
                 objective_change = abs(previous_obj_val - incumbent_obj_val)
                 estimated_infectious_change = np.abs(
                     previous_solution.infectious.sum(axis=1) - incumbent_solution.infectious.sum(axis=1)
@@ -794,16 +837,12 @@ class PrescriptiveDELPHIModel:
                 if max(objective_change, estimated_infectious_change) < termination_tol:
                     trajectory.append(incumbent_obj_val)
                     if log:
-                        print("No improvement found - terminating search")
+                        print("Solution has converged - terminating search for trial")
                     break
 
-            # Store trajectory for completed trial
-            trajectories.append(trajectory)
-
-            # If the policy produced during the random trial is better than current one, update all parameters
-            if incumbent_obj_val < best_obj_val:
-                best_obj_val = incumbent_obj_val
-                best_solution = incumbent_solution
+            # Store trajectory and best solution for completed restart
+            self._trajectories.append(trajectory)
+            self._solutions.append(best_solution_for_restart)
 
         # Apply post-processing steps to solution
         if log:
