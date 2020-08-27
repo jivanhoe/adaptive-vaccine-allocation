@@ -17,12 +17,12 @@ class Scenario:
             end_date: dt.datetime,
             vaccine_effectiveness: float,
             daily_vaccine_budget: float,
-            max_total_capacity: Optional[float] = None,
-            max_allocation_factor: float = MAX_ALLOCATION_FACTOR,
             min_allocation_factor: float = MIN_ALLOCATION_FACTOR,
+            max_allocation_factor: float = MAX_ALLOCATION_FACTOR,
             max_increase_pct: float = MAX_INCREASE_PCT,
             max_decrease_pct: float = MAX_DECREASE_PCT,
             excluded_risk_classes: List[int] = EXCLUDED_RISK_CLASSES,
+            max_total_capacity: Optional[float] = None,
             optimize_capacity: bool = OPTIMIZE_CAPACITY
     ):
         self.start_date = start_date
@@ -91,10 +91,10 @@ class Scenario:
 
     def run(
             self,
-            model_path: str,
-            baseline_solution_path: str,
-            optimized_solution_path: str,
             mortality_rate_path: str,
+            model_path: Optional[str] = None,
+            baseline_solution_path: Optional[str] = None,
+            optimized_solution_path: Optional[str] = None,
             reload_mortality_rate: bool = False
     ) -> Tuple[float, float]:
 
@@ -105,9 +105,10 @@ class Scenario:
                 np.save(fp, model.mortality_rate)
 
         print("Running baseline...")
-        baseline_solution = model.simulate(prioritization_allocation=False)
-        with open(baseline_solution_path, "wb") as fp:
-            pickle.dump(baseline_solution, fp)
+        baseline_solution = model.simulate(prioritize_allocation=False)
+        if baseline_solution_path:
+            with open(baseline_solution_path, "wb") as fp:
+                pickle.dump(baseline_solution, fp)
 
         print("Optimizing...")
         optimized_solution = model.optimize(
@@ -118,10 +119,12 @@ class Scenario:
             barrier_conv_tol=BARRIER_CONV_TOL,
             log=True
         )
-        with open(optimized_solution_path, "wb") as fp:
-            pickle.dump(optimized_solution, fp)
-        with open(model_path, "wb") as fp:
-            pickle.dump(model, fp)
+        if optimized_solution_path:
+            with open(optimized_solution_path, "wb") as fp:
+                pickle.dump(optimized_solution, fp)
+        if model_path:
+            with open(model_path, "wb") as fp:
+                pickle.dump(model, fp)
 
         return baseline_solution.get_objective_value(), optimized_solution.get_objective_value()
 

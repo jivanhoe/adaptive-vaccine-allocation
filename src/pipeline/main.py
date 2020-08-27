@@ -11,11 +11,13 @@ if __name__ == "__main__":
         dict(
             **dates,
             vaccine_effectiveness=vaccine_effectiveness,
-            daily_vaccine_budget=daily_vaccine_budget
+            daily_vaccine_budget=daily_vaccine_budget,
+            min_allocation_factor=min_allocation_factor
         )
         for dates in DATES_GRID
         for vaccine_effectiveness in VACCINE_EFFECTIVENESS_GRID
         for daily_vaccine_budget in DAILY_VACCINE_BUDGET_GRID
+        for min_allocation_factor in MIN_ALLOCATION_FACTOR_GRID
     ]
 
     for i, scenario_params in enumerate(scenario_params_grid):

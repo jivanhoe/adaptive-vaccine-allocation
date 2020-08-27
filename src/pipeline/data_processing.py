@@ -109,13 +109,13 @@ def get_mortality_rate_estimates(
     for j, state in enumerate(pop_df["state"].unique()):
         cases = predictions_df[
             (predictions_df["state"] == state)
-            & (predictions_df["date"] >= start_date - lag[j])
-            & (predictions_df["date"] <= end_date - lag[j])
+            & (predictions_df["date"] >= start_date)
+            & (predictions_df["date"] <= end_date)
         ]["total_detected_cases"].diff().dropna().to_numpy()
         deaths = predictions_df[
             (predictions_df["state"] == state)
-            & (predictions_df["date"] >= start_date)
-            & (predictions_df["date"] <= end_date)
+            & (predictions_df["date"] >= start_date + lag[j])
+            & (predictions_df["date"] <= end_date + lag[j])
         ]["total_detected_deaths"].diff().dropna().to_numpy()
         deaths = np.where(deaths / cases <= MAX_MORTALITY_RATE, deaths, MAX_MORTALITY_RATE * cases)
         mortality_rate_estimator = MortalityRateEstimator(

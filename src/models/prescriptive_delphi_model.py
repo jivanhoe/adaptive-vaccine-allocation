@@ -168,7 +168,7 @@ class PrescriptiveDELPHIModel:
             self,
             vaccinated: Optional[np.ndarray] = None,
             randomize_allocation: bool = False,
-            prioritization_allocation: bool = False
+            prioritize_allocation: bool = False
     ) -> DELPHISolution:
         """
         Solve DELPHI IVP using a forward difference scheme.
@@ -177,7 +177,7 @@ class PrescriptiveDELPHIModel:
         allocation of vaccines by region and risk class at each timestep
         :param randomize_allocation: a boolean that specifies whether to randomly generate a feasible  allocation policy
         based on an exponential distribution if none provided (default False)
-        :param prioritization_allocation: a boolean that specifies whether to prioritize allocation to high risk
+        :param prioritize_allocation: a boolean that specifies whether to prioritize allocation to high risk
         individuals within each region if no allocation policy is provided (default False)
         :return: a DELPHISolution object
         """
@@ -215,8 +215,9 @@ class PrescriptiveDELPHIModel:
         recovered[:, :, 0] = self.initial_recovered
         eligible[:, :, 0] = self.initial_susceptible
 
-        # Rank risk classes by mortality rate
-        priority_ranking = np.argsort(-self.mortality_rate.mean(axis=(0, 2)))
+        # Generate risk classes and region ranks
+        risk_class_priority_rankings = np.argsort(-self.mortality_rate.mean(axis=(0, 2)))
+        region_priority_rankings = np.random.permutation(self._regions)  # only used for randomized allocation
 
         # Propagate discrete DELPHI dynamics with vaccine allocation heuristic
         for t in self._timesteps:
@@ -231,23 +232,32 @@ class PrescriptiveDELPHIModel:
 
                 # If random allocation specified, generate feasible allocation
                 if randomize_allocation:
-                    min_vaccinated = self.min_allocation_pct * eligible
+                    min_vaccinated = self.min_allocation_pct * eligible[:, :, t]
                     additional_budget = self.vaccine_budget[t] - min_vaccinated.sum()
-                    additional_proportion = np.random.exponential(size=(self._n_regions, self._n_included_risk_classes))
-                    additional_proportion = additional_proportion / additional_proportion.sum()
-                    vaccinated[:, self._included_risk_classes, t] = np.minimum(
-                        eligible,
-                        np.minimum(
-                            min_vaccinated + additional_proportion * additional_budget,
-                            self.max_allocation_pct * self.population[:, self._included_risk_classes]
+                    for j in region_priority_rankings:
+                        regional_budget = np.minimum(
+                            additional_budget,
+                            self.max_allocation_pct * self.population[j, :].sum() - min_vaccinated[j, :].sum()
                         )
-                    )
+                        additional_budget -= regional_budget
+                        for k in risk_class_priority_rankings:
+                            if k in self._included_risk_classes:
+                                vaccinated[j, k, t] = np.minimum(regional_budget, eligible[j, k, t]) \
+                                    + min_vaccinated[j, k]
+                                regional_budget -= vaccinated[j, k, t]
+                                if regional_budget <= 0:
+                                    break
+                        if additional_budget <= 0:
+                            break
 
                 # Else use baseline policy that orders region-wise allocation by risk class
                 else:
-                    if prioritization_allocation:
-                        regional_budget = eligible[:, :, t].sum(axis=1) / eligible[:, :, t].sum() * self.vaccine_budget[t]
-                        for k in priority_ranking:
+                    if prioritize_allocation:
+                        regional_budget = np.minimum(
+                            eligible[:, :, t].sum(axis=1) / eligible[:, :, t].sum() * self.vaccine_budget[t],
+                            self.max_allocation_pct * self.population.sum(axis=1)
+                        )
+                        for k in risk_class_priority_rankings:
                             if k in self._included_risk_classes:
                                 vaccinated[:, k, t] = np.minimum(regional_budget, eligible[:, k, t])
                                 regional_budget -= vaccinated[:, k, t]
@@ -770,7 +780,7 @@ class PrescriptiveDELPHIModel:
             # Initialize restart
             incumbent_solution = self.simulate(
                 randomize_allocation=n_restarts > 1,
-                prioritization_allocation=True
+                prioritize_allocation=True
             )
             incumbent_obj_val = incumbent_solution.get_objective_value()
             trajectory = [incumbent_obj_val]
@@ -818,7 +828,7 @@ class PrescriptiveDELPHIModel:
                 # Update incumbent solution for restart if incumbent solution is an improvement
                 if incumbent_obj_val < best_obj_val_for_restart:
                     best_obj_val_for_restart = incumbent_obj_val
-                    best_solution_for_restart = best_solution_for_restart
+                    best_solution_for_restart = incumbent_solution
                     n_iters_since_improvement = 0
                 else:
                     n_iters_since_improvement += 1
@@ -826,7 +836,10 @@ class PrescriptiveDELPHIModel:
                 # Terminate coordinate descent for restart if solution convergences
                 if n_iters_since_improvement >= n_early_stopping_iterations:
                     if log:
-                        print(f"No improvement found in {n_early_stopping_iterations} iterations - terminating search for trial")
+                        print(
+                            f"No improvement found in {n_early_stopping_iterations} iterations"
+                            f" - terminating search for trial"
+                        )
                     break
 
                 # Terminate coordinate descent for restart if solution convergences
@@ -858,3 +871,4 @@ class PrescriptiveDELPHIModel:
         if log:
             print(f"Objective value after post-processing: {'{0:.2f}'.format(best_solution.get_objective_value())}")
         return best_solution
+

@@ -40,16 +40,16 @@ MAX_MORTALITY_RATE = 0.2
 REGULARIZATION_PARAM = 0.1
 
 # Coordinate descent algorithm parameters
-EXPLORATION_TOL = 1e2
-TERMINATION_TOL = 1e2
+EXPLORATION_TOL = 5e2
+TERMINATION_TOL = 5e2
 MAX_ITERATIONS = 10
-N_EARLY_STOPPING_ITERATIONS = 2
+N_EARLY_STOPPING_ITERATIONS = 1
 
 # Gurobi parameters
 TIME_LIMIT = 200
 FEASIBILITY_TOL = 1e-3
 MIP_GAP = 5e-2
-BARRIER_CONV_TOL = 1e-6
+BARRIER_CONV_TOL = 1e-5
 
 # Fixed DELPHI parameters
 DETECTION_PROBABILITY = 0.2
@@ -72,5 +72,7 @@ DATES_GRID = [
     dict(start_date=dt.datetime(2020, 4, 20), end_date=dt.datetime(2020, 7, 15)),
     dict(start_date=dt.datetime(2020, 7, 15), end_date=dt.datetime(2020, 10, 15))
 ]
-VACCINE_EFFECTIVENESS_GRID = [0.3, 0.4, 0.5, 0.6, 0.7]
-DAILY_VACCINE_BUDGET_GRID = [1e5, 2e5, 3e5, 5e5, 1e6]
+VACCINE_EFFECTIVENESS_GRID = [0.3, 0.4, 0.5, 0.6, 0.7, 1.0]
+DAILY_VACCINE_BUDGET_GRID = [1e5, 2e5, 3e5, 5e5, 1e6, 2e6]
+MIN_ALLOCATION_FACTOR_GRID = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
+
